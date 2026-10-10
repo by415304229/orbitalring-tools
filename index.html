@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>星环 OrbitalRing 工具集 · 产线计算器 / 蓝图生成器 / 通关引导</title>
+<style>
+:root{
+  --bg:#0b0e17; --panel:#131829; --panel2:#1a2136; --line:#26304d;
+  --fg:#e6ebff; --muted:#8b96b8; --acc:#5ad1ff; --acc2:#ffb454;
+  --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.6 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+a{color:var(--acc)}
+header.top{padding:18px 24px;background:linear-gradient(135deg,#131829,#1b2444);
+  border-bottom:1px solid var(--line)}
+header.top h1{margin:0 0 4px;font-size:20px;letter-spacing:.5px}
+header.top .sub{color:var(--muted);font-size:12.5px}
+header.top .sub code{background:#0d1220;padding:1px 5px;border-radius:3px}
+nav.tabs{display:flex;gap:6px;padding:10px 24px 0;background:var(--panel);
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tab-btn{background:none;border:1px solid transparent;border-bottom:none;color:var(--muted);
+  padding:9px 18px;cursor:pointer;border-radius:8px 8px 0 0;font-size:14px;font-family:inherit}
+.tab-btn:hover{color:var(--fg);background:#182038}
+.tab-btn.active{color:var(--acc);background:var(--bg);border-color:var(--line)}
+main{padding:20px 24px 60px;max-width:1500px;margin:0 auto}
+.tab{display:none}.tab.active{display:block}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px;margin-bottom:16px}
+.panel>h2{margin:0 0 12px;font-size:15px;color:var(--acc);
+  border-bottom:1px solid var(--line);padding-bottom:8px}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:1fr 1fr}
+.g-side{grid-template-columns:minmax(320px,1fr) 2fr}
+@media(max-width:900px){.g2,.g-side{grid-template-columns:1fr}}
+label{display:inline-flex;align-items:center;gap:6px;margin-right:14px}
+select,input[type=number],input[type=text],textarea{
+  background:#0d1220;color:var(--fg);border:1px solid var(--line);border-radius:6px;
+  padding:6px 9px;font-family:inherit;font-size:13px}
+select:focus,input:focus,textarea:focus{outline:none;border-color:var(--acc)}
+textarea{width:100%;min-height:80px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+button{background:var(--acc);color:#04121c;border:none;border-radius:6px;
+  padding:7px 15px;cursor:pointer;font-weight:600;font-family:inherit;font-size:13px}
+button:hover{filter:brightness(1.12)}
+button.mini{padding:2px 8px;font-size:11.5px;background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+button.ghost{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;background:#0f1424;position:sticky;top:0}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tfoot td{font-weight:700;background:#0f1424;border-top:2px solid var(--line)}
+.muted{color:var(--muted)}
+.tag{display:inline-block;background:var(--panel2);border:1px solid var(--line);
+  border-radius:4px;padding:0 6px;font-size:11px;color:var(--muted);margin-left:4px}
+.tag.warn{color:#04121c;background:var(--warn);border-color:var(--warn);font-weight:700}
+.tag.hidden{color:var(--bad);border-color:#5a2b2b}
+.notice{background:#0f1a2e;border-left:3px solid var(--acc);padding:9px 12px;
+  border-radius:0 6px 6px 0;font-size:12.5px;color:#b9cdf0;margin-bottom:12px}
+.notice.ok{border-left-color:var(--ok);background:#0e1f18;color:#a8e6c0}
+.warnbox{background:#2a1a10;border-left:3px solid var(--warn);padding:9px 12px;
+  border-radius:0 6px 6px 0;font-size:12.5px;color:#f0d3a0;margin-bottom:12px}
+code{background:#0d1220;padding:1px 5px;border-radius:3px;font-size:12px}
+/* --- calculator tree --- */
+#c-tree{max-height:520px;overflow:auto;background:#0a0e19;border:1px solid var(--line);
+  border-radius:8px;padding:10px}
+.node{padding:3px 0;border-left:2px solid transparent;font-size:12.8px;white-space:nowrap}
+.node .prod{font-weight:600}
+.node .via{color:var(--muted);margin:0 6px}
+.node .mach{color:var(--acc)}
+.node .meta{color:#5f6b8c;font-size:11.5px;margin-left:6px}
+.node .bp{color:var(--acc2);font-size:11.5px;margin-left:6px}
+.node.raw{color:#9fd6a8}
+.node.cycle{color:var(--bad)}
+tr.lowconf{background:#1f1a0e}
+tr.logi td{color:#9fd0b0}
+.logtable{width:100%;font-size:12px;border-collapse:collapse;margin-top:4px}
+.logtable th,.logtable td{padding:3px 6px;border-bottom:1px solid #1b2338;text-align:left}
+.logtable td.r,.logtable th.r{text-align:right;font-variant-numeric:tabular-nums}
+.recipes{color:var(--muted);font-size:11.5px;max-width:340px;white-space:normal}
+/* --- guide --- */
+.gbar{height:10px;background:#0d1220;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+.gbar>div{height:100%;background:linear-gradient(90deg,var(--acc),var(--ok));transition:width .3s}
+.phase{border:1px solid var(--line);border-radius:9px;margin-bottom:11px;overflow:hidden;background:var(--panel)}
+.phase-head{display:flex;justify-content:space-between;align-items:center;
+  padding:11px 15px;cursor:pointer;background:var(--panel2);user-select:none}
+.phase-head h3{margin:0;font-size:14px}
+.phase-head:hover{background:#212b47}
+.phase-count{color:var(--acc);font-weight:700;font-variant-numeric:tabular-nums}
+.phase.collapsed .phase-body{display:none}
+.phase-body{padding:6px 12px 12px}
+/* milestone walkthrough */
+.milestone.ms-done{border-color:var(--ok)}
+.milestone.ms-done .phase-head{background:#12291e}
+.ms-idx{display:inline-block;min-width:22px;height:22px;line-height:22px;text-align:center;
+  border-radius:50%;background:var(--acc);color:#06101f;font-weight:800;font-size:12px;margin-right:6px}
+.ms-count{color:var(--muted);font-weight:500;font-size:12px;margin-left:6px}
+.ms-stats{display:flex;gap:12px;align-items:center;font-size:12.5px;color:var(--muted);flex:none}
+.ms-stats b{color:var(--acc)}
+.ms-open{border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer;
+  background:#18223c;color:#c6d0ee;font-size:12px}
+.ms-open:hover{background:#26325a;border-color:var(--acc)}
+.ms-goal{color:#a8c6e6;font-size:12.8px;margin:2px 0 10px}
+.ms-cols{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start}
+.ms-col h4{margin:0 0 6px;font-size:12.5px;color:var(--acc);font-weight:700}
+.ms-bldg{width:100%;font-size:12.3px;border-collapse:collapse}
+.ms-bldg th,.ms-bldg td{padding:3px 6px;border-bottom:1px solid #1b2338;text-align:left}
+.ms-bldg td.r,.ms-bldg th.r{text-align:right;font-variant-numeric:tabular-nums}
+.ms-bldg tfoot td{font-weight:700;color:var(--acc);border-bottom:none}
+.tag.hash{margin-left:auto;background:#1a2340;border-color:#2c3a63;color:#8fb0e6}
+@media(max-width:760px){.ms-cols{grid-template-columns:1fr}}
+.tech{border-bottom:1px solid #1b2338;padding:7px 4px}
+.tech:last-child{border-bottom:none}
+.tech.done{opacity:.55}
+.tech.done .tech-name{text-decoration:line-through}
+.tech.locked .tech-name{color:#9aa6c8}
+.tech-main{display:flex;align-items:flex-start;gap:9px;cursor:pointer;width:100%}
+.tech-main input{margin-top:4px;width:15px;height:15px;accent-color:var(--ok);flex:none}
+.tech-name{font-weight:600}
+.tech-detail{margin-left:24px;color:var(--muted);font-size:12.3px;display:none}
+.tech.open .tech-detail,.tech:hover .tech-detail{display:block}
+.tech-detail p{margin:4px 0}
+.kv{display:flex;gap:8px;font-size:12px;margin:2px 0}
+.kv>span{color:#6d79a0;min-width:66px;flex:none}
+.kv>b{font-weight:500;color:#c6d0ee}
+.locknote{color:var(--warn);font-size:12px;margin:3px 0}
+.concl{background:#0e1f18;border-left:2px solid var(--ok);padding:5px 9px;
+  border-radius:0 5px 5px 0;margin-top:5px;color:#a8e6c0;font-size:12px}
+.stats{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:8px}
+.stats b{color:var(--acc);font-size:15px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+#b-out{min-height:110px}
+.hint{font-size:11.5px;color:var(--muted);margin-top:5px}
+/* ---- item icons + categorized picker ---- */
+.ico{display:inline-block;vertical-align:middle;background-repeat:no-repeat;image-rendering:pixelated;flex:none}
+.ico-missing{display:inline-flex;align-items:center;justify-content:center;background:var(--panel2);
+  border:1px dashed var(--line);border-radius:4px;color:var(--muted);font-size:11px;text-align:center}
+.sel-target{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.picker-wrap{max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;
+  padding:8px;background:#0c1424;margin-top:8px}
+.icon-grid{display:grid;gap:2px;justify-content:start}
+.icon-grid .cell{background:none;border:1px solid transparent;border-radius:5px;padding:1px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:0;transition:background .08s}
+.icon-grid .cell:hover{background:#1b2745;border-color:var(--line)}
+.icon-grid .cell.sel{background:var(--acc);border-color:#fff}
+.icon-grid .cell.dim{opacity:.12;pointer-events:none}
+/* ---- expansion tree ---- */
+.node{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0;font-size:12.5px}
+.node .prod{font-weight:600}
+.node.raw{color:#9fb0d8}
+.node.cycle{color:var(--warn)}
+.recipe-pick,.machine-pick{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+  border-radius:5px;font-size:11.5px;padding:1px 4px;max-width:230px}
+.machine-pick{max-width:170px}
+#b-summary table{margin-top:6px}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>星环 OrbitalRing 工具集</h1>
+  <div class="sub">
+    产线计算器 · 蓝图生成器 · 通关引导 &nbsp;|&nbsp;
+    数据提取自 <a href="https://github.com/ProfessorCat305/OrbitalRing-MOD" target="_blank">ProfessorCat305/OrbitalRing-MOD</a>
+    的 <code>data/*.json</code>（配方/物品/科技/字符串表）
+  </div>
+  <div class="stats">
+    <span>物品 <b id="stat-items">0</b></span>
+    <span>配方 <b id="stat-recipes">0</b></span>
+    <span>科技 <b id="stat-techs">0</b></span>
+    <span>建筑 <b id="stat-machines">0</b></span>
+    <span>机器表来源 <b id="stat-prov">—</b></span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="tab-calc">产线计算器</button>
+  <button class="tab-btn" data-tab="tab-bp">蓝图生成器</button>
+  <button class="tab-btn" data-tab="tab-guide">通关引导 / 项目跟踪</button>
+  <button class="tab-btn" data-tab="tab-recipes">配方浏览器</button>
+</nav>
+
+<main>
+
+<!-- ============ 计算器 ============ -->
+<section id="tab-calc" class="tab active">
+  <div class="panel">
+    <h2>目标产物</h2>
+    <div id="c-prov"></div>
+    <div class="row">
+      <label>产物 <select id="c-item" style="min-width:240px"></select></label>
+      <span id="c-target" class="sel-target"></span>
+      <label>目标产量 <input id="c-rate" type="number" value="60" min="0" step="1" style="width:95px"> /min</label>
+      <label>增产插件加成 <input id="c-prol" type="number" value="0" min="0" max="1" step="0.05" style="width:75px"></label>
+      <label><input id="c-round" type="checkbox"> 机器数向上取整</label>
+      <label>建筑等级
+        <select id="c-tier">
+          <option value="basic">基础（最省科技）</option>
+          <option value="fast">最快（高级建筑）</option>
+        </select>
+      </label>
+      <input id="c-search" type="text" placeholder="搜索物品名…" style="min-width:180px">
+    </div>
+    <div class="hint">「产物」下拉按游戏内 GridIndex 分类（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 等，★ 为星环新增）；也可在下方图标网格中直接点选。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。</div>
+    <div id="c-picker" class="picker-wrap"></div>
+  </div>
+
+  <div class="grid g-side">
+    <div>
+      <div class="panel"><h2>机器汇总</h2><div id="c-machines"></div></div>
+      <div class="panel"><h2>原料需求</h2><div id="c-raws"></div></div>
+      <div id="c-warn"></div>
+    </div>
+    <div class="panel">
+      <h2>产线展开树</h2>
+      <div id="c-tree"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 蓝图（由产线计算器自动生成） ============ -->
+<section id="tab-bp" class="tab">
+  <div class="panel">
+    <h2>蓝图生成器 · 由产线计算器自动驱动</h2>
+    <div class="notice">
+      先在「产线计算器」选好目标产物并求解，再点击下方按钮：生成器会读取当前产线的
+      <b>机器汇总</b>，按建筑占位自动排布为不重叠的网格、并为每台机器预置对应配方，
+      再编码成可粘贴的蓝图串。编码格式已用官方测试蓝图做过往返校验（gzip + MD5F 校验和），
+      游戏内 <b>Ctrl+V</b> 粘贴即可。<br>
+      建筑的 <code>itemId / modelIndex</code> 取自星环 mod 源码（items_*.json），非推测。
+      当前版本仅摆放机器并预置配方，<b>未自动铺设传送带 / 分拣器连线</b>。
+    </div>
+    <div class="row">
+      <button id="b-gen">从当前产线生成蓝图</button>
+      <button id="b-copy" class="ghost">复制蓝图串</button>
+      <label>短标题 <input id="b-shortdesc" type="text" value="星环产线" style="width:140px"></label>
+      <label>布局
+        <select id="b-layout">
+          <option value="grid">网格（默认，不重叠）</option>
+          <option value="strip">长条形</option>
+          <option value="rect">矩形</option>
+          <option value="compact">紧凑</option>
+          <option value="magic">仙术（重叠，利用蓝图bug）</option>
+        </select>
+      </label>
+      <label>每行建筑数 <input id="b-rowlen" type="number" value="24" min="1" step="1" style="width:70px"></label>
+    </div>
+    <div class="row">
+      <span class="muted" style="font-size:12.5px">物流连线（可选）：</span>
+      <label><input id="b-belt" type="checkbox"> 铺设传送带</label>
+      <label><input id="b-inserter" type="checkbox"> 铺设分拣器</label>
+      <span class="muted" style="font-size:11.5px">等级按每台机器速率自动适配（传送带 items/min = beltSpeed×360；分拣器 = 18000000/STT，取自 mod <code>prefabDescs.json</code>）</span>
+    </div>
+    <div id="b-status" class="hint"></div>
+  </div>
+
+  <div class="grid g2">
+    <div class="panel">
+      <h2>生成结果</h2>
+      <div id="b-summary"></div>
+      <textarea id="b-out" readonly placeholder="生成的蓝图字符串会显示在这里"></textarea>
+    </div>
+    <div class="panel">
+      <h2>导入 / 解码现有蓝图</h2>
+      <textarea id="b-import" placeholder="粘贴 BLUEPRINT:0,... 字符串"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="b-import-btn">解析并校验</button>
+        <span class="hint">可查看别人分享的蓝图构成，或校验字符串是否合法。</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 引导 ============ -->
+<section id="tab-guide" class="tab">
+  <div class="panel">
+    <h2>通关流程引导（里程碑）</h2>
+    <div class="gbar"><div id="g-progress-bar" style="width:0"></div></div>
+    <div class="row" style="margin-top:10px">
+      <span id="g-progress-text" class="muted"></span>
+      <label style="margin-left:auto">筛选 <input id="g-filter" type="text" placeholder="搜索科技名/描述…" style="width:170px"></label>
+      <button id="g-export" class="ghost">导出进度</button>
+      <button id="g-reset" class="ghost">重置</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>里程碑产物目标速率 <input id="g-ms-rate" type="number" value="60" min="1" step="30" style="width:88px"> /min</label>
+      <label>研究效率假设 <input id="g-hashrate" type="number" value="1500" min="1" step="100" style="width:96px"> hash/min</label>
+      <span class="muted" style="font-size:11.5px">（时长 = 阶段研究量 ÷ 研究效率，为<b>估算</b>，可调节）</span>
+      <label style="margin-left:auto"><input id="g-showtree" type="checkbox"> 显示完整科技树</label>
+    </div>
+    <div class="hint">
+      通关流程按 <b>13 个里程碑</b> 拆解：从电气矩阵开局，经石油化工→红糖→材料矩阵→钛星球黄糖→信息矩阵→星际物流→电磁/粒子矩阵→引力矩阵与戴森球→防守太空黑雾→生物科技线，直至大统一矩阵终局。
+      每个里程碑列出<b>本阶段新解锁的科技</b>（前置科技树递归求差集）、<b>约需建筑数量</b>（用计算器对该里程碑产物按目标速率求解并向上取整）、以及<b>估算游戏时长</b>（阶段研究量 ÷ 研究效率）。
+      进度保存在浏览器 localStorage（单机、离线、不上传），勾选科技后自动更新进度条与后续 🔒 提示。
+    </div>
+  </div>
+  <div id="g-phases"></div>
+</section>
+
+<!-- ============ 配方 ============ -->
+<section id="tab-recipes" class="tab">
+  <div class="panel">
+    <h2>配方浏览器（共 <span id="r-count">0</span> 条）</h2>
+    <div class="row">
+      <label>搜索 <input id="r-q" type="text" placeholder="配方名 / 输入 / 输出" style="width:230px"></label>
+      <label>类型 <select id="r-type"></select></label>
+    </div>
+    <div id="r-table" style="max-height:620px;overflow:auto"></div>
+  </div>
+</section>
+
+</main>
+
+<script src="data.js"></script>
+<script src="blueprint-codec.js"></script>
+<script src="blueprint-gen.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
