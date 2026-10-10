@@ -102,7 +102,7 @@ function machinesFor(type) {
  *     lowest-tier machine. This mirrors dsp-calc's default factory choice and keeps
  *     the line buildable with early tech (基础制造台 / 电弧熔炉 …).
  *  'fast' -> the FASTEST building (end-game mega structures), minimising machine count. */
-function bestMachineFor(type, prefer) {
+function bestMachineFor(type, prefer, doneTechs) {
   const all = machinesFor(type);
   if (!all.length) return null;
   // A machine whose speed was never extracted (speed == null, e.g. 低温工厂) must
@@ -110,10 +110,57 @@ function bestMachineFor(type, prefer) {
   // silently zero the whole chain. Only fall back to unknown-speed machines when
   // there is no speed-known alternative, and then assume 1x at low confidence.
   const known = all.filter(m => Number.isFinite(m.speed) && m.speed > 0);
-  if (!known.length) return { ...all[0], speed: 1, confidence: 'low' };
-  return prefer === 'fast'
-    ? known.reduce((a, b) => (b.speed > a.speed ? b : a))
-    : known.reduce((a, b) => (b.speed < a.speed ? b : a));
+  const pool = known.length ? known : all;
+  const pick = (arr, fastest) => {
+    const p = arr.filter(m => Number.isFinite(m.speed) && m.speed > 0);
+    if (!p.length) return { ...arr[0], speed: 1, confidence: 'low' };
+    return fastest ? p.reduce((a, b) => (b.speed > a.speed ? b : a))
+                   : p.reduce((a, b) => (b.speed < a.speed ? b : a));
+  };
+  if (prefer === 'tech') {
+    // 适配科技等级: use the FASTEST building the player has actually unlocked
+    // (per the guide's completed-tech progress). If none is unlocked yet, fall back
+    // to the earliest/basic building rather than an end-game one.
+    const dt = doneTechs || new Set();
+    const avail = pool.filter(m => isBuildingAvailable(m.itemId, dt));
+    return avail.length ? pick(avail, true) : pick(pool, false);
+  }
+  return prefer === 'fast' ? pick(pool, true) : pick(pool, false);
+}
+
+/* ---- building availability by unlocked tech (drives the 适配科技等级 tier) ----
+ * A building is craftable once a tech that unlocks one of ITS OWN crafting recipes
+ * is completed. building -> crafting recipe -> tech.unlockRecipes, all from mod data.
+ * Buildings with no crafting recipe (or a recipe no tech gates) are available from
+ * the start. Nothing here is guessed — it is read out of techs.json/recipes.json. */
+let BUILDING_UNLOCK = null;
+function buildingUnlockMap() {
+  if (BUILDING_UNLOCK) return BUILDING_UNLOCK;
+  const recipeToTechs = new Map();
+  for (const t of TECHS) for (const rid of (t.unlockRecipes || [])) {
+    if (!recipeToTechs.has(rid)) recipeToTechs.set(rid, []);
+    recipeToTechs.get(rid).push(t.id);
+  }
+  const m = new Map();
+  for (const mach of MACHINES) {
+    const recipes = RECIPES_BY_OUTPUT.get(mach.itemId) || [];
+    const techs = new Set();
+    let initial = recipes.length === 0;      // no recipe found -> don't gate it
+    for (const r of recipes) {
+      const ts = recipeToTechs.get(r.id);
+      if (!ts || !ts.length) initial = true;  // a recipe nobody gates -> available early
+      else ts.forEach(id => techs.add(id));
+    }
+    m.set(mach.itemId, { techs, initial });
+  }
+  BUILDING_UNLOCK = m;
+  return m;
+}
+function isBuildingAvailable(itemId, doneTechs) {
+  const e = buildingUnlockMap().get(itemId);
+  if (!e || e.initial) return true;
+  for (const id of e.techs) if (doneTechs.has(id)) return true;
+  return false;
 }
 
 /* ---- recipes producing a given item -------------------------------------- */
@@ -151,7 +198,17 @@ function solve(itemId, rate, opts, depth = 0, seen = new Set()) {
 
   // raw resource or no recipe -> leaf
   if (!recipes.length) {
-    return { kind: 'raw', itemId, rate, machines: 0, depth, children: [] };
+    return { kind: 'raw', itemId, rate, machines: 0, depth, children: [], minable: false };
+  }
+
+  // Mined resources (item.miningFrom) are RAW by default — you mine them, not
+  // synthesize them — even when a synthesis recipe also exists (e.g. 石矿 id1005 is
+  // mined from 石矿脉 but can also be made via 岩浆冷却). Only craft it when the user
+  // explicitly overrode it with a recipe. Mirrors how the reference calculator
+  // treats ores as raw inputs. `alts` lets the tree offer a mine/craft switch.
+  if (!chosenRecipeId && isRaw(itemId)) {
+    return { kind: 'raw', itemId, rate, machines: 0, depth, children: [],
+             minable: true, alts: recipes };
   }
 
   // cycle guard
@@ -168,7 +225,7 @@ function solve(itemId, rate, opts, depth = 0, seen = new Set()) {
   const chosenMachine = chosenMachineId
     ? MACHINES.find(m => m.itemId === chosenMachineId && m.types.includes(recipe.type))
     : null;
-  const machine = chosenMachine || bestMachineFor(recipe.type, opts.tier) || { name: '?', speed: 1, itemId: 0 };
+  const machine = chosenMachine || bestMachineFor(recipe.type, opts.tier, opts.doneTechs) || { name: '?', speed: 1, itemId: 0 };
   // guard: a manually-picked building whose speed was never extracted (null) would
   // make perMachinePerMin 0 and zero the chain — assume 1x at low confidence instead.
   const machineSafe = (Number.isFinite(machine.speed) && machine.speed > 0)
@@ -313,47 +370,81 @@ function populateCategorySelect(sel) {
   sel.innerHTML = html;
 }
 
-/* ---- categorized icon-grid picker ---------------------------------------
- * Faithful to dsp-calc's GridIndex layout: column x = gridIndex % 100,
- * row y = floor(gridIndex / 100) (each row band is an in-game category). */
+/* ---- product picker: the icon grid lives INSIDE a dropdown, with category
+ * tabs (建筑/材料/金属/化工/军事/消耗品). Faithful to the mod's GridIndex
+ * categorisation; only valid production targets (crafted, minable, or fluid) are
+ * listed. A search query overrides the active tab and matches across all
+ * categories. */
 const PICKER_EXCLUDE = new Set(['沙土', '伊卡洛斯', '行星基地', '巨构星际组装厂']);
 let targetItem = null;
-function buildPicker() {
-  const wrap = $('#c-picker');
-  const list = D.items.filter(i => i.gridIndex > 0 && !PICKER_EXCLUDE.has(i.name));
-  const cell = new Map();
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const it of list) {
-    const x = it.gridIndex % 100, y = Math.floor(it.gridIndex / 100);
-    const k = x + ',' + y;
-    if (!cell.has(k)) cell.set(k, it);
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
-  }
-  if (!cell.size) { wrap.innerHTML = '<p class="muted">无可用物品图标。</p>'; return; }
-  const ncol = maxX - minX + 1, SIZE = 34;
-  let html = `<div class="icon-grid" style="grid-template-columns:repeat(${ncol},${SIZE}px);grid-auto-rows:${SIZE}px">`;
-  for (const [k, it] of cell) {
-    const [x, y] = k.split(',').map(Number);
-    html += `<button type="button" class="cell" data-id="${it.id}" data-name="${esc(it.name)}" ` +
-      `style="grid-column:${x - minX + 1};grid-row:${y - minY + 1}" title="${esc(it.name)}${it.fromMod ? ' ★星环' : ''}">` +
-      `${iconHtml(it, SIZE - 6)}</button>`;
-  }
-  wrap.innerHTML = html + '</div>';
-  wrap.querySelectorAll('.cell').forEach(b =>
-    b.addEventListener('click', () => selectTarget(+b.dataset.id)));
+let pickerCat = null;      // active category lead (number)
+let pickerQuery = '';
+
+function pickerItems() {
+  return D.items.filter(i => !PICKER_EXCLUDE.has(i.name) &&
+    ((RECIPES_BY_OUTPUT.get(i.id) || []).length || i.miningFrom || i.type === 1 || i.type === 2 || i.isFluid));
 }
-function filterPicker(q) {
-  q = (q || '').trim().toLowerCase();
-  $$('#c-picker .cell').forEach(b =>
-    b.classList.toggle('dim', !!q && !b.dataset.name.toLowerCase().includes(q)));
+function pickerCategories() {
+  const byCat = new Map();
+  for (const it of pickerItems()) {
+    const lead = itemCategoryLead(it);
+    if (!byCat.has(lead)) byCat.set(lead, []);
+    byCat.get(lead).push(it);
+  }
+  return [...byCat.entries()].sort((a, b) => {
+    const ia = CATEGORY_ORDER.indexOf(a[0]), ib = CATEGORY_ORDER.indexOf(b[0]);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+}
+function buildProdPicker() {
+  const cats = pickerCategories();
+  if (pickerCat == null || !cats.some(([lead]) => lead === pickerCat)) {
+    pickerCat = cats.length ? cats[0][0] : null;
+  }
+  const tabsEl = $('#c-pp-tabs');
+  if (tabsEl) {
+    tabsEl.innerHTML = cats.map(([lead, items]) =>
+      `<button type="button" class="pp-tab${lead === pickerCat ? ' active' : ''}" data-cat="${lead}">` +
+      `${esc(CATEGORY_LABELS[lead] || ('分类 ' + lead))} <span class="pp-n">${items.length}</span></button>`).join('');
+    tabsEl.querySelectorAll('.pp-tab').forEach(b => b.addEventListener('click', () => {
+      pickerCat = +b.dataset.cat;
+      pickerQuery = ''; const s = $('#c-search'); if (s) s.value = '';
+      buildProdPicker();
+    }));
+  }
+  renderPickerGrid();
+}
+function renderPickerGrid() {
+  const wrap = $('#c-picker');
+  if (!wrap) return;
+  const q = pickerQuery.trim().toLowerCase();
+  let list = q
+    ? pickerItems().filter(i => i.name.toLowerCase().includes(q))
+    : ((pickerCategories().find(([lead]) => lead === pickerCat) || [null, []])[1]);
+  list = list.slice().sort((a, b) => (a.gridIndex - b.gridIndex) || a.name.localeCompare(b.name, 'zh'));
+  if (!list.length) { wrap.innerHTML = '<p class="muted">无匹配物品。</p>'; return; }
+  wrap.innerHTML = `<div class="pp-cells">` + list.map(it =>
+    `<button type="button" class="pp-cell${it.id === targetItem ? ' sel' : ''}" data-id="${it.id}" ` +
+    `title="${esc(it.name)}${it.fromMod ? ' ★星环' : ''}">` +
+    `${iconHtml(it, 30)}<span class="pp-cell-name">${esc(it.name)}</span></button>`).join('') + `</div>`;
+  wrap.querySelectorAll('.pp-cell').forEach(b => b.addEventListener('click', () => {
+    selectTarget(+b.dataset.id);
+    toggleProdPicker(false);
+  }));
+}
+function filterPicker(q) { pickerQuery = q || ''; renderPickerGrid(); }
+function toggleProdPicker(force) {
+  const p = $('#c-prodpicker'); if (!p) return;
+  const open = force !== undefined ? force : !p.classList.contains('open');
+  p.classList.toggle('open', open);
 }
 function selectTarget(id) {
   targetItem = id;
-  $('#c-item').value = id;
-  $$('#c-picker .cell').forEach(b => b.classList.toggle('sel', +b.dataset.id === id));
   const it = ITEMS.get(id);
-  $('#c-target').innerHTML = it ? `当前目标：${iconHtml(it, 22)} <b>${esc(it.name)}</b>` : '';
+  const icoEl = $('#c-pp-icon'); if (icoEl) icoEl.innerHTML = it ? iconHtml(it, 24) : '';
+  const nameEl = $('#c-pp-name'); if (nameEl) nameEl.textContent = it ? it.name : '选择产物…';
+  $$('#c-picker .pp-cell').forEach(b => b.classList.toggle('sel', +b.dataset.id === id));
+  const t = $('#c-target'); if (t) t.innerHTML = it ? `当前目标：${iconHtml(it, 22)} <b>${esc(it.name)}</b>` : '';
   calc();
 }
 
@@ -370,16 +461,29 @@ function renderTree(node, out, depth = 0) {
     return;
   }
   if (node.kind === 'raw') {
-    out.push(`<div class="node raw" style="margin-left:${depth * 18}px">${iconHtml(ITEMS.get(node.itemId), 18)} ⛏ ${esc(itemName(node.itemId))} <b>${fmt(node.rate)}/min</b> <span class="tag">原料</span></div>`);
+    // A mined resource that ALSO has synthesis recipes gets a mine/craft switch, so the
+    // user can choose to craft it (e.g. 石矿 via 岩浆冷却) instead of treating it as raw.
+    const alts = node.alts || [];
+    const pick = alts.length
+      ? ` <select class="recipe-pick" data-item="${node.itemId}" title="该资源可开采，也可选择配方合成">` +
+        `<option value="0" selected>⛏ 开采（作为原料）</option>` +
+        alts.map(r => `<option value="${r.id}">${esc(r.name)} · 合成</option>`).join('') +
+        `</select>`
+      : '';
+    out.push(`<div class="node raw" style="margin-left:${depth * 18}px">${iconHtml(ITEMS.get(node.itemId), 18)} ⛏ ${esc(itemName(node.itemId))} <b>${fmt(node.rate)}/min</b> <span class="tag">原料</span>${pick}</div>`);
     return;
   }
   const by = node.byproducts && node.byproducts.length
     ? ` <span class="bp">副产: ${node.byproducts.map(b => `${esc(itemName(b.itemId))} ${fmt(b.rate)}/min`).join(', ')}</span>` : '';
   // per-node recipe picker: when this product has multiple recipes, let the user
   // switch AT THIS NODE (mirrors dsp-calc's per-item recipe choice in the tree).
+  // If the item is also minable, offer a "开采(原料)" option (value 0) so the user can
+  // switch back from synthesizing to treating it as a mined raw material.
   const alts = RECIPES_BY_OUTPUT.get(node.itemId) || [];
-  const via = alts.length > 1
-    ? `<span class="via">←</span> <select class="recipe-pick" data-item="${node.itemId}" title="该产物有 ${alts.length} 个可选配方">` +
+  const minable = isRaw(node.itemId);
+  const via = (alts.length > 1 || minable)
+    ? `<span class="via">←</span> <select class="recipe-pick" data-item="${node.itemId}" title="该产物有 ${alts.length} 个可选配方${minable ? '，也可开采为原料' : ''}">` +
+      (minable ? `<option value="0">⛏ 开采（作为原料）</option>` : '') +
       alts.map(r => `<option value="${r.id}"${r.id === node.recipe.id ? ' selected' : ''}>${esc(r.name)}${alts.length > 1 ? ` · ${esc(RT[r.type] || r.type)}` : ''}</option>`).join('') +
       `</select>`
     : `<span class="via">← ${esc(node.recipe.name)}</span>`;
@@ -402,7 +506,9 @@ function renderTree(node, out, depth = 0) {
 }
 
 function calc() {
-  const itemId = +$('#c-item').value;
+  const itemId = (typeof targetItem === 'number' && targetItem)
+    ? targetItem
+    : +((($('#c-item') || {}).value) || 0);
   const rate = parseFloat($('#c-rate').value) || 60;
   const prol = parseFloat($('#c-prol').value) || 0;
   const roundUp = $('#c-round').checked;
@@ -415,6 +521,8 @@ function calc() {
   // several tree nodes and a stale duplicate <select> would otherwise clobber the choice.
   opts.recipeOverride = { ...recipeChoices };
   opts.machineOverride = { ...machineChoices };
+  // completed techs (from the guide's progress) drive the 适配科技等级 tier
+  opts.doneTechs = new Set(Object.keys(progress).filter(k => progress[k]).map(Number));
 
   lastRoot = solve(itemId, rate, opts);
   const agg = aggregate(lastRoot);
@@ -434,11 +542,27 @@ function calc() {
         <td class="recipes">${esc([...m.recipes].join(', '))}</td></tr>`).join('') +
     `</tbody><tfoot><tr><td>合计</td><td class="r">${fmt(totalMachines)}</td><td class="r">${agg.byMachine.reduce((s, m) => s + Math.ceil(m.count), 0)}</td><td></td></tr></tfoot></table>`;
 
-  // raw resources
-  $('#c-raws').innerHTML = agg.byRaw.length
-    ? `<table><thead><tr><th>原料</th><th class="r">需求 /min</th></tr></thead><tbody>` +
+  // raw resources + belt occupancy (传送带占用) for each raw and the final product.
+  // Belt tier is the lowest whose throughput (beltSpeed×360 /min, from prefabDescs)
+  // covers the flow; count = ceil(rate / tierThroughput) parallel belts.
+  const beltCell = r => {
+    if (!(r > 0) || !BELTS.length) return '<td class="r">—</td><td class="r">—</td><td class="r">—</td>';
+    const b = beltFor(r);
+    const n = Math.ceil(r / b.perMin);
+    const occ = (r / (b.perMin * n)) * 100;   // load per belt at the recommended tier
+    return `<td>${iconHtml(ITEMS.get(b.itemId), 16)} ${esc(b.name)} <span class="muted">(${fmt(b.perMin, 0)}/min)</span></td>` +
+           `<td class="r">${n}</td><td class="r">${occ.toFixed(0)}%</td>`;
+  };
+  const prodBeltRow = `<tr class="prodrow"><td>${iconHtml(ITEMS.get(itemId), 20)} <b>${esc(itemName(itemId))}</b> <span class="tag">产物</span></td>` +
+    `<td class="r">${fmt(rate)}</td>${beltCell(rate)}</tr>`;
+  $('#c-raws').innerHTML = (agg.byRaw.length || rate > 0)
+    ? `<table><thead><tr><th>物料</th><th class="r">流量 /min</th><th>传送带等级</th><th class="r">条数</th><th class="r">占用</th></tr></thead><tbody>` +
+      prodBeltRow +
       agg.byRaw.sort((a, b) => b[1] - a[1]).map(([id, r]) =>
-        `<tr><td>${iconHtml(ITEMS.get(id), 20)} ${esc(itemName(id))}</td><td class="r">${fmt(r)}</td></tr>`).join('') + `</tbody></table>`
+        `<tr><td>${iconHtml(ITEMS.get(id), 20)} ${esc(itemName(id))}</td><td class="r">${fmt(r)}</td>${beltCell(r)}</tr>`).join('') +
+      `</tbody></table>` +
+      `<div class="hint">传送带等级取“能承载该流量的最低等级”（吞吐源自 mod <code>prefabDescs</code>：beltSpeed×360 /min）；占用 = 该流量占单条推荐带运力的比例，多条同物料可共用一条带。</div>` +
+      (BELTS.length ? '' : '<p class="muted">未提取到传送带数据，无法计算占用。</p>')
     : '<p class="muted">无需外部原料（全部可自产）。</p>';
 
   if (agg.cycles.length) {
@@ -452,7 +576,14 @@ function calc() {
     $('#c-prov').innerHTML = `<div class="notice">当前使用<b>回退机器速度表</b>（原版DSP数值 + 星环新增建筑推测值，标记为 <span class="tag warn">?</span>）。
       运行 <code>node tools/extract-machines.mjs</code> 从mod源码提取精确数值后重新构建即可。</div>`;
   } else {
-    $('#c-prov').innerHTML = `<div class="notice ok">机器速度与可制造配方类型已从星环mod源码提取（${MACHINES.length} 台建筑）。</div>`;
+    let note = `<div class="notice ok">机器速度与可制造配方类型已从星环mod源码提取（${MACHINES.length} 台建筑）。</div>`;
+    if (opts.tier === 'tech') {
+      const doneN = opts.doneTechs.size;
+      note += doneN
+        ? `<div class="notice">「适配科技等级」：按你在<b>通关引导</b>勾选的 ${doneN} 项科技，选用当前已解锁的最快建筑。</div>`
+        : `<div class="notice warn">「适配科技等级」：尚未在<b>通关引导</b>勾选任何科技，暂按最早可用建筑估算。去引导页勾选已完成的科技后，此处会自动升级为已解锁的高级建筑。</div>`;
+    }
+    $('#c-prov').innerHTML = note;
   }
 }
 
@@ -947,9 +1078,10 @@ function boot() {
   }));
 
   // calculator
-  populateCategorySelect($('#c-item'));
-  $('#c-item').addEventListener('change', e => selectTarget(+e.target.value));
-  buildPicker();
+  buildProdPicker();
+  $('#c-pp-btn').addEventListener('click', e => { e.stopPropagation(); toggleProdPicker(); });
+  $('#c-pp-panel').addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', () => toggleProdPicker(false));   // click outside closes
   $('#c-rate').value = 60;
   ['c-rate', 'c-prol'].forEach(id => $('#' + id).addEventListener('input', calc));
   $('#c-round').addEventListener('change', calc);

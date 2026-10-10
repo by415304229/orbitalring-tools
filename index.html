@@ -145,6 +145,35 @@ tr.logi td{color:#9fd0b0}
 .icon-grid .cell:hover{background:#1b2745;border-color:var(--line)}
 .icon-grid .cell.sel{background:var(--acc);border-color:#fff}
 .icon-grid .cell.dim{opacity:.12;pointer-events:none}
+/* ---- product picker dropdown (icon grid + category tabs inside) ---- */
+.prod-picker{position:relative;display:inline-block}
+.pp-btn{display:inline-flex;align-items:center;gap:8px;min-width:230px;padding:6px 11px;
+  background:#0c1424;border:1px solid var(--line);border-radius:8px;cursor:pointer;color:#c6d0ee;font-size:13.5px}
+.pp-btn:hover{border-color:var(--acc)}
+.pp-icon{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;flex:none}
+.pp-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pp-caret{margin-left:auto;color:var(--muted);transition:transform .12s}
+.prod-picker.open .pp-caret{transform:rotate(180deg)}
+.pp-panel{display:none;position:absolute;z-index:60;left:0;top:calc(100% + 6px);width:520px;max-width:92vw;
+  background:#0c1424;border:1px solid var(--acc);border-radius:10px;padding:9px;
+  box-shadow:0 12px 34px rgba(0,0,0,.55)}
+.prod-picker.open .pp-panel{display:block}
+.pp-tabs{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.pp-tab{background:#141d33;border:1px solid var(--line);color:#9fb0d8;border-radius:6px;
+  padding:4px 9px;cursor:pointer;font-size:12px;display:inline-flex;align-items:center;gap:5px}
+.pp-tab:hover{border-color:var(--acc);color:#c6d0ee}
+.pp-tab.active{background:var(--acc);color:#06101f;border-color:var(--acc);font-weight:700}
+.pp-n{opacity:.7;font-size:11px}
+.pp-search{width:100%;box-sizing:border-box;margin-bottom:8px}
+.pp-grid{max-height:290px;margin-top:0}
+.pp-cells{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:5px}
+.pp-cell{display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 2px;
+  background:#111a2e;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:#a9b6d8}
+.pp-cell:hover{background:#1b2745;border-color:var(--acc);color:#e6ecff}
+.pp-cell.sel{background:var(--acc);border-color:#fff;color:#06101f}
+.pp-cell-name{font-size:10.5px;line-height:1.15;text-align:center;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
 /* ---- expansion tree ---- */
 .node{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0;font-size:12.5px}
 .node .prod{font-weight:600}
@@ -189,7 +218,18 @@ tr.logi td{color:#9fd0b0}
     <h2>目标产物</h2>
     <div id="c-prov"></div>
     <div class="row">
-      <label>产物 <select id="c-item" style="min-width:240px"></select></label>
+      <div class="prod-picker" id="c-prodpicker">
+        <button type="button" class="pp-btn" id="c-pp-btn">
+          <span class="pp-icon" id="c-pp-icon"></span>
+          <span class="pp-name" id="c-pp-name">选择产物…</span>
+          <span class="pp-caret">▾</span>
+        </button>
+        <div class="pp-panel" id="c-pp-panel">
+          <div class="pp-tabs" id="c-pp-tabs"></div>
+          <input id="c-search" class="pp-search" type="text" placeholder="搜索物品名（跨全部分类）…">
+          <div id="c-picker" class="picker-wrap pp-grid"></div>
+        </div>
+      </div>
       <span id="c-target" class="sel-target"></span>
       <label>目标产量 <input id="c-rate" type="number" value="60" min="0" step="1" style="width:95px"> /min</label>
       <label>增产插件加成 <input id="c-prol" type="number" value="0" min="0" max="1" step="0.05" style="width:75px"></label>
@@ -198,12 +238,11 @@ tr.logi td{color:#9fd0b0}
         <select id="c-tier">
           <option value="basic">基础（最省科技）</option>
           <option value="fast">最快（高级建筑）</option>
+          <option value="tech">适配科技等级（按通关进度）</option>
         </select>
       </label>
-      <input id="c-search" type="text" placeholder="搜索物品名…" style="min-width:180px">
     </div>
-    <div class="hint">「产物」下拉按游戏内 GridIndex 分类（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 等，★ 为星环新增）；也可在下方图标网格中直接点选。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。</div>
-    <div id="c-picker" class="picker-wrap"></div>
+    <div class="hint">点击「产物」下拉框，在弹出的<b>分类标签页</b>（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 / 消耗品，★ 为星环新增）中点选图标，或直接搜索。建筑等级选「适配科技等级」时，会按你在<b>通关引导</b>勾选的科技进度，选用当前已解锁的最快建筑。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。</div>
   </div>
 
   <div class="grid g-side">
