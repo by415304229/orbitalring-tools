@@ -1383,6 +1383,23 @@ function boot() {
     $('#' + b.dataset.tab).classList.add('active');
   }));
 
+  // "?" help popovers (content lives in <template>, shown on demand — no page space)
+  const HELP_TITLES = { calc: '产线计算器 · 使用说明', bp: '蓝图生成器 · 使用说明', guide: '通关引导 · 使用说明', recipes: '配方浏览器 · 使用说明' };
+  const helpModal = $('#help-modal'), helpBody = $('#help-modal-body'), helpTitle = $('#help-modal-title');
+  const closeHelp = () => { if (helpModal) helpModal.hidden = true; };
+  const openHelp = key => {
+    const tpl = $('#help-tpl-' + key);
+    if (!tpl || !helpModal) return;
+    helpBody.innerHTML = '';
+    helpBody.appendChild(tpl.content.cloneNode(true));
+    helpTitle.textContent = HELP_TITLES[key] || '使用说明';
+    helpModal.hidden = false;
+  };
+  $$('[data-help]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); openHelp(b.dataset.help); }));
+  const hc = $('#help-close'); if (hc) hc.addEventListener('click', closeHelp);
+  if (helpModal) helpModal.addEventListener('click', e => { if (e.target === helpModal) closeHelp(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeHelp(); });
+
   // calculator
   buildProdPicker();
   $('#c-pp-btn').addEventListener('click', e => { e.stopPropagation(); toggleProdPicker(); });

@@ -151,6 +151,25 @@ tr.logi td{color:#9fd0b0}
 .help ul{margin:4px 0 0;padding-left:18px}
 .help li{margin:2px 0}
 .help code{background:#0d1220;border:1px solid var(--line);border-radius:4px;padding:0 4px;color:#9fb0d8}
+/* ---- "?" help trigger + popover modal (help no longer occupies page space) ---- */
+.qbtn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+  margin-left:6px;vertical-align:1px;border-radius:50%;background:var(--panel2);color:var(--muted);
+  border:1px solid var(--line);font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1}
+.qbtn:hover{color:var(--acc);border-color:var(--acc)}
+.help-modal{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+  background:rgba(4,8,16,.62);backdrop-filter:blur(2px);padding:20px}
+.help-modal[hidden]{display:none}
+.help-modal-box{width:min(720px,94vw);max-height:min(80vh,640px);display:flex;flex-direction:column;
+  background:#10182b;border:1px solid var(--acc);border-radius:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.6);overflow:hidden}
+.help-modal-head{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;background:#0d1424;border-bottom:1px solid var(--line)}
+.help-modal-head span{font-size:13px;font-weight:700;color:var(--acc)}
+.help-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;
+  line-height:1;padding:2px 6px;border-radius:6px}
+.help-close:hover{color:var(--fg);background:#1b2745}
+.help-modal-body{padding:14px 16px;overflow:auto;scrollbar-width:thin}
+.help-modal-body .help{margin-top:0}
 /* ---- attribution footer ---- */
 footer.site-foot{max-width:1500px;margin:0 auto;padding:22px 24px 40px;
   border-top:1px solid var(--line);color:var(--muted);font-size:11.5px;line-height:1.7}
@@ -250,7 +269,7 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
 <!-- ============ 计算器 ============ -->
 <section id="tab-calc" class="tab active">
   <div class="panel">
-    <h2>目标产物</h2>
+    <h2>目标产物 <button type="button" class="qbtn" data-help="calc" title="本页使用说明">?</button></h2>
     <div id="c-prov"></div>
     <div class="row">
       <div class="prod-picker" id="c-prodpicker">
@@ -294,16 +313,6 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
         <button type="button" class="ghost sm" data-preset-rec="clear" title="清除所有手动配方选择，恢复默认">清除配方</button>
       </span>
     </div>
-    <div class="help">
-      <span class="hl">怎么用：</span>点「产物」下拉框 → 在弹出的<b>分类标签页</b>里点图标选目标（或用搜索框直接找），设好目标产量，右侧即给出机器汇总、原料 / 传送带占用、副产物配平与完整展开树。
-      <ul>
-        <li><b>分类标签页</b>共六类，沿用游戏内建造菜单的分类：建筑 / 设施、材料 / 元器件、金属 / 矿石、化工 / 流体 / 生物、军事 / 武器 / 黑雾、消耗品 / 弹药 / 增产剂；图标排布也保持游戏内的 GridIndex 位置。带 <code>★</code> 的是星环 mod 新增物品。</li>
-        <li><b>建筑等级</b>：基础＝最省科技的初级建筑；最快＝顶级建筑（台数最少）；适配科技＝按你在「通关引导」勾选的进度，只用当前已解锁的最快建筑。</li>
-        <li><b>一键预设</b>：批量套用建筑等级，或统一配方倾向——高级 / 低级配方按「解锁该配方的科技在科技树中的深度」排序，含 / 不含熔岩按配方是否消耗熔岩·岩浆·熔融金属判定。仍可在展开树里对单个节点再微调。</li>
-        <li><b>增产插件加成</b>填 0.25 即 +25% 产出；标记「不可增产」的配方自动忽略。</li>
-        <li>建筑等级、配方选择、目标产物等<b>偏好自动保存</b>在本地浏览器，刷新后保留；「重置偏好」可一键清空。</li>
-      </ul>
-    </div>
   </div>
 
   <div class="grid g-side">
@@ -323,17 +332,7 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
 <!-- ============ 蓝图（由产线计算器自动生成） ============ -->
 <section id="tab-bp" class="tab">
   <div class="panel">
-    <h2>蓝图生成器 · 由产线计算器自动驱动</h2>
-    <div class="help">
-      <span class="hl">怎么用：</span>
-      <ul>
-        <li>① 先在<b>产线计算器</b>选好目标产物并求解；② 回到本页点「从当前产线生成蓝图」；③ 复制蓝图串，进游戏 <code>Ctrl+V</code> 粘贴。</li>
-        <li><b>布局</b>：网格（默认，不重叠）/ 长条形 / 矩形 / 紧凑 / 仙术（故意重叠，利用蓝图 bug 高密度堆叠）。「每行建筑数」控制排布宽度。</li>
-        <li><b>物流连线（可选）</b>：勾选后自动铺设传送带 / 分拣器，等级按每台机器的速率适配（传送带 items/min = beltSpeed×360；分拣器 = 18000000/STT，取自 mod <code>prefabDescs.json</code>）。</li>
-        <li>生成器读取计算器的<b>机器汇总</b>，为每台机器预置对应配方并按占位排布。建筑 <code>itemId / modelIndex</code> 取自星环 mod 源码，非推测；编码格式已用官方测试蓝图做过往返校验（gzip + MD5F 校验和）。</li>
-        <li>下方「导入 / 解码」可粘贴别人的 <code>BLUEPRINT:0,...</code> 串查看构成或校验合法性。</li>
-      </ul>
-    </div>
+    <h2>蓝图生成器 · 由产线计算器自动驱动 <button type="button" class="qbtn" data-help="bp" title="本页使用说明">?</button></h2>
     <div class="row">
       <button id="b-gen">从当前产线生成蓝图</button>
       <button id="b-copy" class="ghost">复制蓝图串</button>
@@ -378,7 +377,7 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
 <!-- ============ 引导 ============ -->
 <section id="tab-guide" class="tab">
   <div class="panel">
-    <h2>通关流程引导（里程碑）</h2>
+    <h2>通关流程引导（里程碑） <button type="button" class="qbtn" data-help="guide" title="本页使用说明">?</button></h2>
     <div class="gbar"><div id="g-progress-bar" style="width:0"></div></div>
     <div class="row" style="margin-top:10px">
       <span id="g-progress-text" class="muted"></span>
@@ -392,15 +391,6 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
       <span class="muted" style="font-size:11.5px">（时长 = 阶段研究量 ÷ 研究效率，为<b>估算</b>，可调节）</span>
       <label style="margin-left:auto"><input id="g-showtree" type="checkbox"> 显示完整科技树</label>
     </div>
-    <div class="help">
-      <span class="hl">这是什么：</span>一个<b>通关进度跟踪器</b>。它把整条科技线拆成 <b>13 个里程碑</b>（电气矩阵 → 石油化工 → 红糖 → 材料矩阵 → 钛星球黄糖 → 信息矩阵 → 星际物流 → 电磁 / 粒子矩阵 → 引力矩阵与戴森球 → 防守太空黑雾 → 生物科技线 → 大统一矩阵），告诉你每一步该做什么、大概要多少建筑、还要玩多久。
-      <ul>
-        <li><b>怎么用：</b>从上往下按里程碑推进，<b>勾选你已经研究完成的科技</b>。勾选后顶部进度条、以及后续里程碑的 🔒（尚未解锁）提示会自动更新——它同时驱动计算器「适配科技等级」模式，让计算器只用你当前已解锁的建筑。</li>
-        <li><b>每个里程碑给出：</b>本阶段新解锁的科技（按前置科技树递归去重）、按目标速率估算的建筑数量（调用计算器求解并向上取整）、以及估算游戏时长。</li>
-        <li><b>两个可调估算参数：</b>「里程碑产物目标速率」决定建筑数量的规模；「研究效率假设」（hash/min）决定时长估算＝阶段研究量 ÷ 研究效率。二者都只是估算，按你的实际产线 / 挂机效率调整即可。</li>
-        <li><b>其他：</b>「显示完整科技树」展开全部科技明细；筛选框按科技名 / 描述搜索；「导出进度」存成 JSON 备份；「重置」清空。进度只保存在本地浏览器，离线、不上传。</li>
-      </ul>
-    </div>
   </div>
   <div id="g-phases"></div>
 </section>
@@ -408,8 +398,7 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
 <!-- ============ 配方 ============ -->
 <section id="tab-recipes" class="tab">
   <div class="panel">
-    <h2>配方浏览器（共 <span id="r-count">0</span> 条）</h2>
-    <div class="help"><span class="hl">怎么用：</span>浏览 mod 的全部配方原始数据。搜索框可按<b>配方名 / 输入物 / 输出物</b>匹配，类型下拉按 <code>ERecipeType</code>（熔炼 / 化工 / 装配 / 粒子打印 / 物质重组 …）筛选。这里的数据与计算器、蓝图生成器同源，可用来核对某产物的所有可选配方及其 inputs/outputs。</div>
+    <h2>配方浏览器（共 <span id="r-count">0</span> 条） <button type="button" class="qbtn" data-help="recipes" title="本页使用说明">?</button></h2>
     <div class="row">
       <label>搜索 <input id="r-q" type="text" placeholder="配方名 / 输入 / 输出" style="width:230px"></label>
       <label>类型 <select id="r-type"></select></label>
@@ -419,6 +408,53 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
 </section>
 
 </main>
+
+<!-- ============ 使用说明（? 弹出，不占页面空间） ============ -->
+<template id="help-tpl-calc"><div class="help">
+  <span class="hl">怎么用：</span>点「产物」下拉框 → 在弹出的<b>分类标签页</b>里点图标选目标（或用搜索框直接找），设好目标产量，右侧即给出机器汇总、原料 / 传送带占用、副产物配平与完整展开树。
+  <ul>
+    <li><b>分类标签页</b>共六类，沿用游戏内建造菜单的分类：建筑 / 设施、材料 / 元器件、金属 / 矿石、化工 / 流体 / 生物、军事 / 武器 / 黑雾、消耗品 / 弹药 / 增产剂；图标排布也保持游戏内的 GridIndex 位置。带 <code>★</code> 的是星环 mod 新增物品。</li>
+    <li><b>建筑等级</b>：基础＝最省科技的初级建筑；最快＝顶级建筑（台数最少）；适配科技＝按你在「通关引导」勾选的进度，只用当前已解锁的最快建筑。</li>
+    <li><b>一键预设</b>：批量套用建筑等级，或统一配方倾向——高级 / 低级配方按「解锁该配方的科技在科技树中的深度」排序，含 / 不含熔岩按配方是否消耗熔岩·岩浆·熔融金属判定。仍可在展开树里对单个节点再微调。</li>
+    <li><b>增产插件加成</b>填 0.25 即 +25% 产出；标记「不可增产」的配方自动忽略。</li>
+    <li>建筑等级、配方选择、目标产物等<b>偏好自动保存</b>在本地浏览器，刷新后保留；「重置偏好」可一键清空。</li>
+  </ul>
+</div></template>
+
+<template id="help-tpl-bp"><div class="help">
+  <span class="hl">怎么用：</span>
+  <ul>
+    <li>① 先在<b>产线计算器</b>选好目标产物并求解；② 回到本页点「从当前产线生成蓝图」；③ 复制蓝图串，进游戏 <code>Ctrl+V</code> 粘贴。</li>
+    <li><b>布局</b>：网格（默认，不重叠）/ 长条形 / 矩形 / 紧凑 / 仙术（故意重叠，利用蓝图 bug 高密度堆叠）。「每行建筑数」控制排布宽度。</li>
+    <li><b>物流连线（可选）</b>：勾选后自动铺设传送带 / 分拣器，等级按每台机器的速率适配（传送带 items/min = beltSpeed×360；分拣器 = 18000000/STT，取自 mod <code>prefabDescs.json</code>）。</li>
+    <li>生成器读取计算器的<b>机器汇总</b>，为每台机器预置对应配方并按占位排布。建筑 <code>itemId / modelIndex</code> 取自星环 mod 源码，非推测；编码格式已用官方测试蓝图做过往返校验（gzip + MD5F 校验和）。</li>
+    <li>下方「导入 / 解码」可粘贴别人的 <code>BLUEPRINT:0,...</code> 串查看构成或校验合法性。</li>
+  </ul>
+</div></template>
+
+<template id="help-tpl-guide"><div class="help">
+  <span class="hl">这是什么：</span>一个<b>通关进度跟踪器</b>。它把整条科技线拆成 <b>13 个里程碑</b>（电气矩阵 → 石油化工 → 红糖 → 材料矩阵 → 钛星球黄糖 → 信息矩阵 → 星际物流 → 电磁 / 粒子矩阵 → 引力矩阵与戴森球 → 防守太空黑雾 → 生物科技线 → 大统一矩阵），告诉你每一步该做什么、大概要多少建筑、还要玩多久。
+  <ul>
+    <li><b>怎么用：</b>从上往下按里程碑推进，<b>勾选你已经研究完成的科技</b>。勾选后顶部进度条、以及后续里程碑的 🔒（尚未解锁）提示会自动更新——它同时驱动计算器「适配科技等级」模式，让计算器只用你当前已解锁的建筑。</li>
+    <li><b>每个里程碑给出：</b>本阶段新解锁的科技（按前置科技树递归去重）、按目标速率估算的建筑数量（调用计算器求解并向上取整）、以及估算游戏时长。</li>
+    <li><b>两个可调估算参数：</b>「里程碑产物目标速率」决定建筑数量的规模；「研究效率假设」（hash/min）决定时长估算＝阶段研究量 ÷ 研究效率。二者都只是估算，按你的实际产线 / 挂机效率调整即可。</li>
+    <li><b>其他：</b>「显示完整科技树」展开全部科技明细；筛选框按科技名 / 描述搜索；「导出进度」存成 JSON 备份；「重置」清空。进度只保存在本地浏览器，离线、不上传。</li>
+  </ul>
+</div></template>
+
+<template id="help-tpl-recipes"><div class="help">
+  <span class="hl">怎么用：</span>浏览 mod 的全部配方原始数据。搜索框可按<b>配方名 / 输入物 / 输出物</b>匹配，类型下拉按 <code>ERecipeType</code>（熔炼 / 化工 / 装配 / 粒子打印 / 物质重组 …）筛选。这里的数据与计算器、蓝图生成器同源，可用来核对某产物的所有可选配方及其 inputs/outputs。
+</div></template>
+
+<div class="help-modal" id="help-modal" hidden>
+  <div class="help-modal-box" role="dialog" aria-modal="true" aria-label="使用说明">
+    <div class="help-modal-head">
+      <span id="help-modal-title">使用说明</span>
+      <button type="button" class="help-close" id="help-close" title="关闭（Esc）">×</button>
+    </div>
+    <div class="help-modal-body" id="help-modal-body"></div>
+  </div>
+</div>
 
 <footer class="site-foot">
   <div class="foot-cols">
