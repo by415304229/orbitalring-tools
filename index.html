@@ -46,6 +46,13 @@ button{background:var(--acc);color:#04121c;border:none;border-radius:6px;
 button:hover{filter:brightness(1.12)}
 button.mini{padding:2px 8px;font-size:11.5px;background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
 button.ghost{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+button.sm{padding:3px 9px;font-size:11.5px;font-weight:600}
+button.sm.on{background:var(--acc);color:#04121c;border-color:var(--acc)}
+.preset-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:8px;
+  padding:8px 10px;background:#0c1424;border:1px solid var(--line);border-radius:8px}
+.preset-lbl{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.5px}
+.preset-grp{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.preset-grp>.g-name{font-size:11.5px;color:#9fb0d8;margin-right:2px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 th{color:var(--muted);font-weight:600;background:#0f1424;position:sticky;top:0}
@@ -171,7 +178,11 @@ tr.logi td{color:#9fd0b0}
 .pp-tab.active{background:var(--acc);color:#06101f;border-color:var(--acc);font-weight:700}
 .pp-n{opacity:.7;font-size:11px}
 .pp-search{width:100%;min-width:260px;box-sizing:border-box;margin-bottom:8px}
-.pp-grid{max-height:min(62vh,440px);overflow:auto;margin-top:0}
+/* scrollbar hidden (still scrollable via wheel/trackpad) — the native bar clashed
+   with the panel; content fits the taller panel in the common case. */
+.pp-grid{max-height:min(70vh,560px);overflow-y:auto;overflow-x:hidden;margin-top:0;
+  scrollbar-width:none;-ms-overflow-style:none}
+.pp-grid::-webkit-scrollbar{width:0;height:0;display:none}
 .pp-game{display:grid;gap:4px;justify-content:start;align-items:start}
 .pp-cell{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 2px;width:100%;box-sizing:border-box;
   background:#111a2e;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:#a9b6d8}
@@ -250,7 +261,22 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
         </select>
       </label>
     </div>
-    <div class="hint">点击「产物」下拉框，在弹出的<b>分类标签页</b>（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 / 消耗品，★ 为星环新增）中点选图标，或直接搜索。建筑等级选「适配科技等级」时，会按你在<b>通关引导</b>勾选的科技进度，选用当前已解锁的最快建筑。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。你在展开树里为某个配方选定的<b>建筑等级</b>、为产物选定的<b>配方</b>、以及建筑等级模式/配平开关等<b>偏好会自动保存</b>（localStorage），刷新后保留；点「重置偏好」可清空。</div>
+    <div class="preset-bar">
+      <span class="preset-lbl">一键预设</span>
+      <span class="preset-grp"><span class="g-name">建筑</span>
+        <button type="button" class="ghost sm" data-preset-mach="fast" title="所有生产建筑（熔炼炉/制造台等）一律选用速度最高的顶级建筑">全最高级</button>
+        <button type="button" class="ghost sm" data-preset-mach="basic" title="所有生产建筑选用最省科技的基础建筑">全基础</button>
+        <button type="button" class="ghost sm" data-preset-mach="tech" title="按通关引导里已勾选的科技进度，选用当前已解锁的最快建筑">适配科技</button>
+      </span>
+      <span class="preset-grp"><span class="g-name">配方</span>
+        <button type="button" class="ghost sm" data-preset-rec="high" title="每个可多选的产物，改用解锁科技最深（研究量最高）的高级配方">高级配方</button>
+        <button type="button" class="ghost sm" data-preset-rec="low" title="每个可多选的产物，改用最早解锁的低级配方">低级配方</button>
+        <button type="button" class="ghost sm" data-preset-rec="lava" title="凡存在熔岩/岩浆/熔融金属配方的产物，一律改用该熔岩配方">含熔岩</button>
+        <button type="button" class="ghost sm" data-preset-rec="nolava" title="尽量避开熔岩配方，改用不含熔岩的替代配方">不含熔岩</button>
+        <button type="button" class="ghost sm" data-preset-rec="clear" title="清除所有手动配方选择，恢复默认">清除配方</button>
+      </span>
+    </div>
+    <div class="hint">点击「产物」下拉框，在弹出的<b>分类标签页</b>（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 / 消耗品，★ 为星环新增）中点选图标，或直接搜索。建筑等级选「适配科技等级」时，会按你在<b>通关引导</b>勾选的科技进度，选用当前已解锁的最快建筑。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。<b>一键预设</b>可批量设置建筑等级与配方倾向（高级/低级配方按解锁该配方的科技在科技树中的深度排序，含/不含熔岩按配方是否消耗熔岩·岩浆·熔融金属判定），预设结果与展开树里的逐项选择、建筑等级模式、配平开关等<b>偏好会自动保存</b>（localStorage），刷新后保留；点「重置偏好」可清空。</div>
   </div>
 
   <div class="grid g-side">

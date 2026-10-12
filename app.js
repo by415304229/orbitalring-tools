@@ -208,6 +208,58 @@ for (const r of RECIPES) {
 }
 const normOf = r => NORM.get(r.id);
 
+/* ---- recipe "level" (低级/高级) — grounded purely in mod tech data ---------
+ * A recipe's level = how deep into the tech tree it unlocks. depth = longest
+ * path through tech.preTechs; tie-broken by the unlocking tech's research cost
+ * (hashNeeded). Deeper / costlier = 高级. Nothing is guessed: preTechs,
+ * hashNeeded and unlockRecipes all come straight out of techs.json. */
+let TECH_DEPTH = null;
+function techDepthMap() {
+  if (TECH_DEPTH) return TECH_DEPTH;
+  const byId = new Map(TECHS.map(t => [t.id, t]));
+  const memo = new Map();
+  const depth = (id, seen) => {
+    if (memo.has(id)) return memo.get(id);
+    seen = seen || new Set();
+    if (seen.has(id)) return 0;               // cycle guard
+    seen.add(id);
+    const t = byId.get(id); if (!t) return 0;
+    let d = 0;
+    for (const p of (t.preTechs || [])) d = Math.max(d, depth(p, seen) + 1);
+    memo.set(id, d); return d;
+  };
+  const m = new Map();
+  for (const t of TECHS) m.set(t.id, depth(t.id));
+  TECH_DEPTH = m; return m;
+}
+let RECIPE_LEVEL = null;
+function recipeLevelMap() {
+  if (RECIPE_LEVEL) return RECIPE_LEVEL;
+  const dm = techDepthMap();
+  const r2t = new Map();
+  for (const t of TECHS) for (const rid of (t.unlockRecipes || [])) {
+    if (!r2t.has(rid)) r2t.set(rid, []); r2t.get(rid).push(t);
+  }
+  const m = new Map();
+  for (const r of RECIPES) {
+    const ts = r2t.get(r.id);
+    if (!ts || !ts.length) { m.set(r.id, { depth: 0, hash: 0 }); continue; }
+    let best = ts[0];                          // earliest gate = when it first unlocks
+    for (const t of ts) if ((dm.get(t.id) || 0) < (dm.get(best.id) || 0)) best = t;
+    m.set(r.id, { depth: dm.get(best.id) || 0, hash: best.hashNeeded || 0 });
+  }
+  RECIPE_LEVEL = m; return m;
+}
+function cmpLevel(a, b) {                      // <0 => a is lower-level than b
+  const L = recipeLevelMap();
+  const A = L.get(a.id) || { depth: 0, hash: 0 }, B = L.get(b.id) || { depth: 0, hash: 0 };
+  return (A.depth - B.depth) || (A.hash - B.hash) || (a.id - b.id);
+}
+
+/* ---- lava (熔岩/岩浆/熔融金属) detection — name-grounded from mod items ---- */
+const LAVA_IDS = new Set(D.items.filter(i => /熔岩|岩浆|熔融/.test(i.name || '')).map(i => i.id));
+const isLavaRecipe = r => r.inputs.some(i => LAVA_IDS.has(i.item));
+
 /* =========================================================================
  * SOLVER — recursive production-line expansion
  * =========================================================================
@@ -616,6 +668,60 @@ function resetPrefs() {
   if ($('#c-round')) $('#c-round').checked = false;
   if ($('#c-balance-off')) $('#c-balance-off').checked = false;
   calc();
+}
+
+/* ---- one-click preference presets ---------------------------------------
+ * Machine presets drive the global tier (fastest / basic / tech-adapted) and
+ * clear per-recipe building overrides so the choice applies to every line node.
+ * Recipe presets bulk-fill recipeChoices for every craftable item, using the
+ * grounded level ranking (tech-tree depth) and lava detection above. They only
+ * change items that actually have a choice, and never invent data. */
+let machPreset = null;    // last-applied machine preset (for button highlight)
+let recPreset = null;     // last-applied recipe preset (for button highlight)
+function applyMachinePreset(mode) {
+  if ($('#c-tier')) $('#c-tier').value = mode;
+  machineChoices = {};               // drop per-recipe overrides -> tier applies everywhere
+  machPreset = mode;
+  syncPresetButtons();
+  calc();                            // calc() ends with savePrefs()
+}
+function applyRecipePreset(mode) {
+  if (mode === 'clear') {
+    recipeChoices = {};
+    recPreset = null;
+    syncPresetButtons();
+    calc();
+    return;
+  }
+  for (const [itemId, rs] of RECIPES_BY_OUTPUT) {
+    if (!rs || !rs.length) continue;
+    let pick = null;
+    if (mode === 'high' || mode === 'low') {
+      // only items with a genuine choice; don't flip a single-recipe mined ore to crafting
+      if (rs.length < 2) continue;
+      const sorted = rs.slice().sort(cmpLevel);
+      pick = mode === 'high' ? sorted[sorted.length - 1] : sorted[0];
+    } else if (mode === 'lava') {
+      // any item that HAS a lava recipe -> use the highest-level lava recipe
+      const lava = rs.filter(isLavaRecipe);
+      if (!lava.length) continue;
+      pick = lava.slice().sort(cmpLevel).pop();
+    } else if (mode === 'nolava') {
+      // only when there's both a lava and a non-lava option -> switch to non-lava
+      if (!rs.some(isLavaRecipe)) continue;
+      const non = rs.filter(r => !isLavaRecipe(r));
+      if (!non.length) continue;
+      pick = non.slice().sort(cmpLevel)[0];
+    }
+    if (pick) recipeChoices[itemId] = pick.id;
+  }
+  recPreset = mode;
+  syncPresetButtons();
+  calc();
+}
+function syncPresetButtons() {
+  $$('[data-preset-mach]').forEach(b => b.classList.toggle('on', b.dataset.presetMach === machPreset));
+  $$('[data-preset-rec]').forEach(b => b.classList.toggle('on', b.dataset.presetRec === recPreset));
 }
 
 function renderTree(node, out, depth = 0) {
@@ -1286,10 +1392,13 @@ function boot() {
   ['c-rate', 'c-prol'].forEach(id => $('#' + id).addEventListener('input', calc));
   $('#c-round').addEventListener('change', calc);
   $('#c-balance-off').addEventListener('change', calc);
-  $('#c-tier').addEventListener('change', calc);
+  $('#c-tier').addEventListener('change', () => { machPreset = $('#c-tier').value; syncPresetButtons(); calc(); });
   const rp = $('#c-reset-prefs'); if (rp) rp.addEventListener('click', () => {
     if (confirm('确定清空所有计算器偏好（建筑等级预设、配方选择、目标产物等）？')) resetPrefs();
   });
+  // one-click preset buttons
+  $$('[data-preset-mach]').forEach(b => b.addEventListener('click', () => applyMachinePreset(b.dataset.presetMach)));
+  $$('[data-preset-rec]').forEach(b => b.addEventListener('click', () => applyRecipePreset(b.dataset.presetRec)));
   $('#c-search').addEventListener('input', e => filterPicker(e.target.value));
   $('#c-tree').addEventListener('change', e => {
     if (e.target.classList.contains('recipe-pick')) {
