@@ -180,6 +180,34 @@ const isRaw = id => {
   return !!it.miningFrom || !(RECIPES_BY_OUTPUT.get(id) || []).length;
 };
 
+/* ---- recipe normalisation (catalyst netting) ------------------------------
+ * Replicates the reference calculator's NormalizedRecipe: for every item that
+ * appears on BOTH sides of a recipe, subtract min(input,output). The remainder
+ * splits into net inputs (resourceCounts>0) and net outputs (productCounts>0);
+ * items that fully cancel are CATALYSTS (e.g. 速生苗, 共生菌核, 激素生长菌群, 纯银,
+ * 奇夸克样本) — they self-regenerate and must NOT be counted as raw demand, which
+ * is what previously caused spurious recursion/cycles. Nothing is guessed: this is
+ * pure arithmetic on the mod's recipe item counts. */
+const NORM = new Map();
+for (const r of RECIPES) {
+  const inM = new Map(), outM = new Map();
+  for (const i of r.inputs) inM.set(i.item, (inM.get(i.item) || 0) + i.count);
+  for (const o of r.outputs) outM.set(o.item, (outM.get(o.item) || 0) + o.count);
+  const netInputs = [], netOutputs = [], catalysts = [];
+  for (const it of new Set([...inM.keys(), ...outM.keys()])) {
+    const i = inM.get(it) || 0, o = outM.get(it) || 0, m = Math.min(i, o);
+    if (m > 0) catalysts.push({ item: it, count: m });
+    if (i - m > 0) netInputs.push({ item: it, count: i - m });
+    if (o - m > 0) netOutputs.push({ item: it, count: o - m });
+  }
+  NORM.set(r.id, {
+    id: r.id, name: r.name, type: r.type, time: r.time,
+    nonProductive: r.nonProductive, handcraft: r.handcraft,
+    netInputs, netOutputs, catalysts,
+  });
+}
+const normOf = r => NORM.get(r.id);
+
 /* =========================================================================
  * SOLVER — recursive production-line expansion
  * =========================================================================
@@ -187,9 +215,24 @@ const isRaw = id => {
  * one machine yields (60/time)*speed*outCount items per minute, so
  *   machines = desiredRate / perMachineRate
  * ========================================================================= */
-function solve(itemId, rate, opts, depth = 0, seen = new Set()) {
+function solve(itemId, rate, opts, depth = 0, ctx = null) {
   opts = opts || {};
+  ctx = ctx || { stack: new Set(), surplus: new Map(), produced: new Map(), autoSwitched: [] };
   const chosenRecipeId = opts.recipeOverride && opts.recipeOverride[itemId];
+
+  // (1) auto-balance: satisfy as much of this demand as possible from byproduct
+  // surplus accumulated elsewhere in the line before producing anything new.
+  let credited = 0;
+  const avail = ctx.surplus.get(itemId) || 0;
+  if (avail > 0 && rate > 0) {
+    credited = Math.min(avail, rate);
+    ctx.surplus.set(itemId, avail - credited);
+    rate -= credited;
+  }
+  if (rate <= 1e-9) {
+    return { kind: 'credited', itemId, rate: credited, credited, depth, children: [] };
+  }
+
   let recipes = RECIPES_BY_OUTPUT.get(itemId) || [];
   if (chosenRecipeId) {
     const forced = recipes.find(r => r.id === chosenRecipeId);
@@ -198,64 +241,104 @@ function solve(itemId, rate, opts, depth = 0, seen = new Set()) {
 
   // raw resource or no recipe -> leaf
   if (!recipes.length) {
-    return { kind: 'raw', itemId, rate, machines: 0, depth, children: [], minable: false };
+    return { kind: 'raw', itemId, rate, credited, machines: 0, depth, children: [], minable: false };
   }
-
   // Mined resources (item.miningFrom) are RAW by default — you mine them, not
-  // synthesize them — even when a synthesis recipe also exists (e.g. 石矿 id1005 is
-  // mined from 石矿脉 but can also be made via 岩浆冷却). Only craft it when the user
-  // explicitly overrode it with a recipe. Mirrors how the reference calculator
-  // treats ores as raw inputs. `alts` lets the tree offer a mine/craft switch.
+  // synthesize them — even when a synthesis recipe also exists (e.g. 石矿). Only craft
+  // it when the user explicitly overrode it with a recipe. `alts` drives the tree's
+  // mine/craft switch.
   if (!chosenRecipeId && isRaw(itemId)) {
-    return { kind: 'raw', itemId, rate, machines: 0, depth, children: [],
+    return { kind: 'raw', itemId, rate, credited, machines: 0, depth, children: [],
              minable: true, alts: recipes };
   }
-
-  // cycle guard
-  if (seen.has(itemId)) {
-    return { kind: 'cycle', itemId, rate, depth, children: [],
-             note: '循环依赖，已在此截断（可指定另一配方打破）' };
+  // cycle guard: item already being produced up this branch
+  if (ctx.stack.has(itemId)) {
+    return { kind: 'cycle', itemId, rate, credited, depth, children: [],
+             note: '循环依赖，已在此截断（可在展开树为该产物指定其他配方打破循环）' };
   }
 
-  const recipe = recipes[0];
-  // Per-recipe building choice (mirrors dsp-calc's scheme_for_recipe[].建筑). Only a
-  // machine that can actually craft this recipe type is accepted; otherwise fall back
-  // to the tier default. All capabilities come from the mod-extracted machine table.
+  // (2) recipe choice: user override wins; else prefer a recipe whose NET inputs do
+  // not re-enter the current stack (a cheap cycle-avoidance that mirrors the
+  // reference's "try next recipe when unsolvable"); else the default first recipe.
+  let recipe = recipes[0];
+  if (!chosenRecipeId && recipes.length > 1) {
+    const safe = recipes.find(r => !normOf(r).netInputs.some(i => i.item === itemId || ctx.stack.has(i.item)));
+    if (safe) {
+      if (safe.id !== recipe.id) ctx.autoSwitched.push({ itemId, from: recipe.id, to: safe.id });
+      recipe = safe;
+    }
+  }
+  const N = normOf(recipe);
+
+  // Per-recipe building choice; only a machine that can craft this type is accepted.
   const chosenMachineId = opts.machineOverride && opts.machineOverride[recipe.id];
   const chosenMachine = chosenMachineId
     ? MACHINES.find(m => m.itemId === chosenMachineId && m.types.includes(recipe.type))
     : null;
   const machine = chosenMachine || bestMachineFor(recipe.type, opts.tier, opts.doneTechs) || { name: '?', speed: 1, itemId: 0 };
-  // guard: a manually-picked building whose speed was never extracted (null) would
-  // make perMachinePerMin 0 and zero the chain — assume 1x at low confidence instead.
   const machineSafe = (Number.isFinite(machine.speed) && machine.speed > 0)
     ? machine : { ...machine, speed: 1, confidence: 'low' };
 
-  // proliferator: 增产插件 adds extra output; only if recipe is productive
   const prodBonus = (opts.proliferator && !recipe.nonProductive) ? opts.proliferator : 0;
-  const speedBonus = opts.speedPlugin || 0;
 
-  const outCount = (recipe.outputs.find(o => o.item === itemId) || {}).count || 1;
-  const perMachinePerMin = (recipe.time > 0 ? 60 / recipe.time : 0) * machineSafe.speed * outCount * (1 + prodBonus);
+  // main product's NET output per run (catalysts already cancelled out)
+  const outCount = (N.netOutputs.find(o => o.item === itemId) || {}).count || 1;
+  const perMachinePerMin = (N.time > 0 ? 60 / N.time : 0) * machineSafe.speed * outCount * (1 + prodBonus);
   const machinesExact = perMachinePerMin > 0 ? rate / perMachinePerMin : 0;
   const machines = opts.roundUp === false ? machinesExact : Math.ceil(machinesExact * 100) / 100;
-
-  const nextSeen = new Set(seen); nextSeen.add(itemId);
   const actualRate = machinesExact * perMachinePerMin;
 
+  ctx.stack.add(itemId);
   const children = [];
-  for (const inp of recipe.inputs) {
+  for (const inp of N.netInputs) {                 // NET inputs only (catalysts excluded)
     const need = (inp.count / outCount) * actualRate;
-    children.push(solve(inp.item, need, opts, depth + 1, nextSeen));
+    children.push(solve(inp.item, need, opts, depth + 1, ctx));
+  }
+  ctx.stack.delete(itemId);
+
+  // (3) byproducts = other NET outputs; tally them so the next balancing pass can
+  // credit them against demand (auto-balance / minimise dedicated production).
+  const byproducts = [];
+  for (const o of N.netOutputs) {
+    if (o.item === itemId) continue;
+    const br = (o.count / outCount) * actualRate;
+    if (br > 0) {
+      byproducts.push({ itemId: o.item, rate: br });
+      ctx.produced.set(o.item, (ctx.produced.get(o.item) || 0) + br);
+    }
   }
 
   return {
-    kind: 'recipe', itemId, rate, recipe, machine: machineSafe, machines, machinesExact,
-    speed: machineSafe.speed, time: recipe.time, depth, children,
-    byproducts: recipe.outputs.filter(o => o.item !== itemId)
-      .map(o => ({ itemId: o.item, rate: (o.count / outCount) * actualRate })),
-    proliferable: !recipe.nonProductive,
+    kind: 'recipe', itemId, rate, credited, recipe, norm: N, machine: machineSafe,
+    machines, machinesExact, speed: machineSafe.speed, time: N.time, depth, children,
+    byproducts, catalysts: N.catalysts, proliferable: !recipe.nonProductive,
   };
+}
+
+/* Multi-pass byproduct balancing. Pass 0 has no surplus; each later pass seeds the
+ * credit pool with the previous pass's byproduct totals and re-solves, so byproducts
+ * progressively offset dedicated production until the flows stabilise (fixed point).
+ * Cycles can't converge, so we cap iterations and report whatever surplus remains. */
+function solveBalanced(itemId, rate, opts) {
+  opts = opts || {};
+  const balance = opts.balance !== false;
+  let surplus = new Map();
+  let root = null, ctx = null;
+  const maxIter = balance ? 8 : 1;
+  for (let k = 0; k < maxIter; k++) {
+    ctx = { stack: new Set(), surplus: new Map(surplus), produced: new Map(), autoSwitched: [] };
+    root = solve(itemId, rate, opts, 0, ctx);
+    if (!balance) break;
+    if (mapsClose(ctx.produced, surplus)) { surplus = ctx.produced; break; }
+    surplus = ctx.produced;
+  }
+  return { root, ctx, produced: ctx.produced, iterations: maxIter };
+}
+function mapsClose(a, b) {
+  for (const k of new Set([...a.keys(), ...b.keys()])) {
+    if (Math.abs((a.get(k) || 0) - (b.get(k) || 0)) > 1e-6) return false;
+  }
+  return true;
 }
 
 /* Flatten the solve tree into per-machine and per-raw-resource totals. */
@@ -263,12 +346,20 @@ function aggregate(root) {
   const byMachine = new Map();   // key itemId -> {name, count, recipes:Set}
   const byRaw = new Map();       // itemId -> rate
   const byProduct = new Map();   // itemId -> total rate produced
+  const byCredited = new Map();  // itemId -> rate supplied by byproduct credit
+  const byByproduct = new Map(); // itemId -> total byproduct rate generated
+  const autoSwitched = [];
   let cycles = [];
 
   (function walk(node) {
     if (node.kind === 'cycle') { cycles.push(node); return; }
+    if (node.kind === 'credited') {
+      byCredited.set(node.itemId, (byCredited.get(node.itemId) || 0) + (node.credited || node.rate || 0));
+      return;
+    }
     if (node.kind === 'raw') {
       byRaw.set(node.itemId, (byRaw.get(node.itemId) || 0) + node.rate);
+      if (node.credited) byCredited.set(node.itemId, (byCredited.get(node.itemId) || 0) + node.credited);
       return;
     }
     const k = node.machine.itemId || ('?' + node.machine.name);
@@ -278,10 +369,15 @@ function aggregate(root) {
     e.recipes.add(node.recipe.name);
     if (node.machine.confidence === 'low') e.lowConf = true;
     byProduct.set(node.itemId, (byProduct.get(node.itemId) || 0) + node.rate);
+    if (node.credited) byCredited.set(node.itemId, (byCredited.get(node.itemId) || 0) + node.credited);
+    for (const b of (node.byproducts || [])) byByproduct.set(b.itemId, (byByproduct.get(b.itemId) || 0) + b.rate);
     node.children.forEach(walk);
   })(root);
 
-  return { byMachine: [...byMachine.values()], byRaw: [...byRaw.entries()], byProduct: [...byProduct.entries()], cycles };
+  return {
+    byMachine: [...byMachine.values()], byRaw: [...byRaw.entries()], byProduct: [...byProduct.entries()],
+    byCredited: [...byCredited.entries()], byByproduct: [...byByproduct.entries()], autoSwitched, cycles,
+  };
 }
 
 /* =========================================================================
@@ -423,10 +519,27 @@ function renderPickerGrid() {
     : ((pickerCategories().find(([lead]) => lead === pickerCat) || [null, []])[1]);
   list = list.slice().sort((a, b) => (a.gridIndex - b.gridIndex) || a.name.localeCompare(b.name, 'zh'));
   if (!list.length) { wrap.innerHTML = '<p class="muted">无匹配物品。</p>'; return; }
-  wrap.innerHTML = `<div class="pp-cells">` + list.map(it =>
-    `<button type="button" class="pp-cell${it.id === targetItem ? ' sel' : ''}" data-id="${it.id}" ` +
-    `title="${esc(it.name)}${it.fromMod ? ' ★星环' : ''}">` +
-    `${iconHtml(it, 30)}<span class="pp-cell-name">${esc(it.name)}</span></button>`).join('') + `</div>`;
+  // In-game build-menu layout: column x = gridIndex % 100, row y = floor(gridIndex / 100).
+  // We keep that exact spatial arrangement (per category tab), normalised to the
+  // bounds of the items on display so the grid starts at 1,1.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const it of list) {
+    const x = (it.gridIndex || 0) % 100, y = Math.floor((it.gridIndex || 0) / 100);
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  if (!isFinite(minX)) { minX = maxX = minY = maxY = 0; }
+  const ncol = Math.max(1, maxX - minX + 1);
+  const CW = 62;   // cell width px (icon + tiny name)
+  wrap.innerHTML =
+    `<div class="pp-game" style="grid-template-columns:repeat(${ncol},${CW}px)">` +
+    list.map(it => {
+      const x = (it.gridIndex || 0) % 100, y = Math.floor((it.gridIndex || 0) / 100);
+      return `<button type="button" class="pp-cell${it.id === targetItem ? ' sel' : ''}" data-id="${it.id}" ` +
+        `style="grid-column:${x - minX + 1};grid-row:${y - minY + 1}" ` +
+        `title="${esc(it.name)}${it.fromMod ? ' ★星环' : ''} · GridIndex ${it.gridIndex}">` +
+        `${iconHtml(it, 30)}<span class="pp-cell-name">${esc(it.name)}</span></button>`;
+    }).join('') + `</div>`;
   wrap.querySelectorAll('.pp-cell').forEach(b => b.addEventListener('click', () => {
     selectTarget(+b.dataset.id);
     toggleProdPicker(false);
@@ -460,6 +573,11 @@ function renderTree(node, out, depth = 0) {
     out.push(`<div class="node cycle" style="margin-left:${depth * 18}px">⟳ ${iconHtml(ITEMS.get(node.itemId), 18)} ${esc(itemName(node.itemId))} — ${esc(node.note || '循环')}</div>`);
     return;
   }
+  if (node.kind === 'credited') {
+    out.push(`<div class="node credited" style="margin-left:${depth * 18}px">${iconHtml(ITEMS.get(node.itemId), 18)} ♻ ${esc(itemName(node.itemId))} <b>${fmt(node.credited || node.rate)}/min</b> <span class="tag ok">由副产物供给</span></div>`);
+    return;
+  }
+  const creditNote = node.credited ? ` <span class="tag ok" title="其中 ${fmt(node.credited)}/min 由其他配方的副产物抵扣，无需额外生产">副产抵扣 ${fmt(node.credited)}/min</span>` : '';
   if (node.kind === 'raw') {
     // A mined resource that ALSO has synthesis recipes gets a mine/craft switch, so the
     // user can choose to craft it (e.g. 石矿 via 岩浆冷却) instead of treating it as raw.
@@ -470,11 +588,13 @@ function renderTree(node, out, depth = 0) {
         alts.map(r => `<option value="${r.id}">${esc(r.name)} · 合成</option>`).join('') +
         `</select>`
       : '';
-    out.push(`<div class="node raw" style="margin-left:${depth * 18}px">${iconHtml(ITEMS.get(node.itemId), 18)} ⛏ ${esc(itemName(node.itemId))} <b>${fmt(node.rate)}/min</b> <span class="tag">原料</span>${pick}</div>`);
+    out.push(`<div class="node raw" style="margin-left:${depth * 18}px">${iconHtml(ITEMS.get(node.itemId), 18)} ⛏ ${esc(itemName(node.itemId))} <b>${fmt(node.rate)}/min</b> <span class="tag">原料</span>${creditNote}${pick}</div>`);
     return;
   }
   const by = node.byproducts && node.byproducts.length
     ? ` <span class="bp">副产: ${node.byproducts.map(b => `${esc(itemName(b.itemId))} ${fmt(b.rate)}/min`).join(', ')}</span>` : '';
+  const cat = node.catalysts && node.catalysts.length
+    ? ` <span class="cat" title="催化剂：反应前后抵消，不计入净原料需求">⟲ 催化: ${node.catalysts.map(c => `${esc(itemName(c.item))}×${c.count}`).join(', ')}</span>` : '';
   // per-node recipe picker: when this product has multiple recipes, let the user
   // switch AT THIS NODE (mirrors dsp-calc's per-item recipe choice in the tree).
   // If the item is also minable, offer a "开采(原料)" option (value 0) so the user can
@@ -495,12 +615,13 @@ function renderTree(node, out, depth = 0) {
       machOpts.map(m => `<option value="${m.itemId}"${m.itemId === node.machine.itemId ? ' selected' : ''}>${esc(m.name)} ${Number.isFinite(m.speed) && m.speed > 0 ? m.speed + 'x' : '?x'}</option>`).join('') +
       `</select>`
     : esc(node.machine.name);
+  const demand = node.rate + (node.credited || 0);
   out.push(`<div class="node" style="margin-left:${depth * 18}px">
-      ${iconHtml(ITEMS.get(node.itemId), 20)} <span class="prod">${esc(itemName(node.itemId))}</span> <b>${fmt(node.rate)}/min</b>
+      ${iconHtml(ITEMS.get(node.itemId), 20)} <span class="prod">${esc(itemName(node.itemId))}</span> <b>${fmt(demand)}/min</b>
       ${via}
       <span class="mach">${machSel} × <b>${fmt(node.machinesExact)}</b></span>
       <span class="meta">${node.time}s · ${node.speed}x${node.proliferable ? ' · 可增产' : ''}</span>
-      ${by}
+      ${creditNote}${by}${cat}
     </div>`);
   node.children.forEach(c => renderTree(c, out, depth + 1));
 }
@@ -523,8 +644,11 @@ function calc() {
   opts.machineOverride = { ...machineChoices };
   // completed techs (from the guide's progress) drive the 适配科技等级 tier
   opts.doneTechs = new Set(Object.keys(progress).filter(k => progress[k]).map(Number));
+  // byproduct auto-balance (default on): credit byproducts against demand across passes
+  opts.balance = !($('#c-balance-off') && $('#c-balance-off').checked);
 
-  lastRoot = solve(itemId, rate, opts);
+  const solved = solveBalanced(itemId, rate, opts);
+  lastRoot = solved.root;
   const agg = aggregate(lastRoot);
 
   // tree
@@ -565,12 +689,37 @@ function calc() {
       (BELTS.length ? '' : '<p class="muted">未提取到传送带数据，无法计算占用。</p>')
     : '<p class="muted">无需外部原料（全部可自产）。</p>';
 
-  if (agg.cycles.length) {
-    $('#c-warn').innerHTML = `<div class="warnbox">检测到 ${agg.cycles.length} 处循环依赖，已在该处截断。可在下方为目标产物指定其他配方来打破循环。</div>`;
-  } else { $('#c-warn').innerHTML = ''; }
+  // byproduct balance (副产物配平): what each recipe co-produces, how much was credited
+  // against demand elsewhere, and the net surplus the player must store/vent.
+  const prodMap = new Map(agg.byByproduct);
+  const credMap = new Map(agg.byCredited);
+  const bal = [...prodMap.keys()].map(id => ({
+    id, gen: prodMap.get(id) || 0, used: credMap.get(id) || 0,
+  })).map(x => ({ ...x, net: x.gen - x.used })).filter(x => x.gen > 1e-9).sort((a, b) => b.gen - a.gen);
+  const balEl = $('#c-balance');
+  if (balEl) {
+    balEl.innerHTML = bal.length
+      ? `<table><thead><tr><th>副产物</th><th class="r">生成 /min</th><th class="r">已抵扣 /min</th><th class="r">净剩余 /min</th></tr></thead><tbody>` +
+        bal.map(x => `<tr class="${x.net > 1e-6 ? 'surplus' : 'balanced'}"><td>${iconHtml(ITEMS.get(x.id), 18)} ${esc(itemName(x.id))}</td>` +
+          `<td class="r">${fmt(x.gen)}</td><td class="r">${fmt(x.used)}</td>` +
+          `<td class="r">${x.net > 1e-6 ? fmt(x.net) + ' 过剩' : '✓ 已配平'}</td></tr>`).join('') +
+        `</tbody></table>` +
+        `<div class="hint">「已抵扣」= 该副产物被产线其他环节用作原料而自动抵消的量；「净剩余」为仍需储存/排放的过剩量。${opts.balance ? '' : '（当前已关闭自动配平）'}</div>`
+      : '<p class="muted">当前产线无副产物。</p>';
+  }
 
-  // recipe alternatives are now chosen per-node directly in the expansion tree
-  // (see renderTree's <select class="recipe-pick">), so no separate root picker.
+  const switched = (solved.ctx && solved.ctx.autoSwitched) || [];
+  const uniqSwitch = [...new Map(switched.map(s => [s.itemId, s])).values()];
+  let warn = '';
+  if (agg.cycles.length) {
+    warn += `<div class="warnbox">检测到 ${agg.cycles.length} 处循环依赖，已在该处截断（多为熔岩/生物等自催化链）。可在展开树里为该产物换一个配方、或把它设为「⛏ 开采（作为原料）」来打破循环。</div>`;
+  }
+  if (uniqSwitch.length) {
+    warn += `<div class="notice">为避开循环，已自动为 ${uniqSwitch.length} 种产物改用替代配方：` +
+      uniqSwitch.slice(0, 8).map(s => `${esc(itemName(s.itemId))}（${esc((RECIPES.find(r => r.id === s.from) || {}).name || '?')} → <b>${esc((RECIPES.find(r => r.id === s.to) || {}).name || '?')}</b>）`).join('、') +
+      `。如需锁定原配方，在展开树对应节点手动选择即可。</div>`;
+  }
+  $('#c-warn').innerHTML = warn;
 
   if (!USING_EXTRACTED_MACHINES) {
     $('#c-prov').innerHTML = `<div class="notice">当前使用<b>回退机器速度表</b>（原版DSP数值 + 星环新增建筑推测值，标记为 <span class="tag warn">?</span>）。
@@ -695,7 +844,7 @@ function buildMilestoneData(rate, hashRate) {
     let byMachine = [], totalBuildings = 0, raws = [];
     if (prodItem) {
       try {
-        const root = solve(prodItem.id, rate, { tier: 'basic', roundUp: false });
+        const root = solveBalanced(prodItem.id, rate, { tier: 'basic', roundUp: false }).root;
         const agg = aggregate(root);
         byMachine = agg.byMachine.filter(m => m.itemId)
           .map(m => ({ name: m.name, itemId: m.itemId, count: Math.ceil(m.count - 1e-9), lowConf: m.lowConf }))
@@ -1085,6 +1234,7 @@ function boot() {
   $('#c-rate').value = 60;
   ['c-rate', 'c-prol'].forEach(id => $('#' + id).addEventListener('input', calc));
   $('#c-round').addEventListener('change', calc);
+  $('#c-balance-off').addEventListener('change', calc);
   $('#c-tier').addEventListener('change', calc);
   $('#c-search').addEventListener('input', e => filterPicker(e.target.value));
   $('#c-tree').addEventListener('change', e => {
