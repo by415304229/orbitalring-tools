@@ -540,6 +540,15 @@ function renderPickerGrid() {
         `title="${esc(it.name)}${it.fromMod ? ' ★星环' : ''} · GridIndex ${it.gridIndex}">` +
         `${iconHtml(it, 30)}<span class="pp-cell-name">${esc(it.name)}</span></button>`;
     }).join('') + `</div>`;
+  // Size the dropdown panel to the EXPANDED list: width follows the GridIndex grid
+  // (columns × cell + gaps), so narrow categories get a narrow panel and wide ones
+  // expand — instead of a fixed box. CSS max-width:min(94vw,1060px) still clamps on
+  // small screens, where the grid scrolls horizontally.
+  const panel = $('#c-pp-panel');
+  if (panel) {
+    const gridW = ncol * CW + Math.max(0, ncol - 1) * 4 + 34;   // + padding/scrollbar
+    panel.style.width = Math.max(320, Math.min(gridW, 1060)) + 'px';
+  }
   wrap.querySelectorAll('.pp-cell').forEach(b => b.addEventListener('click', () => {
     selectTarget(+b.dataset.id);
     toggleProdPicker(false);
@@ -567,6 +576,47 @@ function selectTarget(id) {
 let lastRoot = null;
 let recipeChoices = {};   // itemId -> chosen recipe id (per-item, shared across tree nodes)
 let machineChoices = {};  // recipeId -> chosen building itemId (per-recipe, like dsp-calc scheme)
+
+/* ---- persisted user preferences ------------------------------------------
+ * Buildings have multiple tiers and recipes have alternatives; the user's picks
+ * (global tier mode, per-recipe building preset, per-item recipe preset, balance
+ * toggle, rate/proliferator/round, and last target) are saved to localStorage so
+ * they survive reloads. Mirrors the reference calculator remembering user prefs. */
+const PREF_KEY = 'starring-calc-prefs-v1';
+function savePrefs() {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({
+      tier: ($('#c-tier') || {}).value || 'basic',
+      rate: ($('#c-rate') || {}).value,
+      prol: ($('#c-prol') || {}).value,
+      roundUp: !!($('#c-round') || {}).checked,
+      balanceOff: !!($('#c-balance-off') || {}).checked,
+      recipeChoices, machineChoices, targetItem,
+    }));
+  } catch { /* storage unavailable (private mode) — prefs just won't persist */ }
+}
+function loadPrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch { p = {}; }
+  if (p.tier && $('#c-tier')) $('#c-tier').value = p.tier;
+  if (p.rate != null && $('#c-rate')) $('#c-rate').value = p.rate;
+  if (p.prol != null && $('#c-prol')) $('#c-prol').value = p.prol;
+  if ($('#c-round')) $('#c-round').checked = !!p.roundUp;
+  if ($('#c-balance-off')) $('#c-balance-off').checked = !!p.balanceOff;
+  if (p.recipeChoices && typeof p.recipeChoices === 'object') recipeChoices = p.recipeChoices;
+  if (p.machineChoices && typeof p.machineChoices === 'object') machineChoices = p.machineChoices;
+  return p;
+}
+function resetPrefs() {
+  recipeChoices = {}; machineChoices = {};
+  try { localStorage.removeItem(PREF_KEY); } catch {}
+  if ($('#c-tier')) $('#c-tier').value = 'basic';
+  if ($('#c-rate')) $('#c-rate').value = 60;
+  if ($('#c-prol')) $('#c-prol').value = 0;
+  if ($('#c-round')) $('#c-round').checked = false;
+  if ($('#c-balance-off')) $('#c-balance-off').checked = false;
+  calc();
+}
 
 function renderTree(node, out, depth = 0) {
   if (node.kind === 'cycle') {
@@ -734,6 +784,7 @@ function calc() {
     }
     $('#c-prov').innerHTML = note;
   }
+  savePrefs();   // persist tier / recipe & building presets / balance / rate / target
 }
 
 /* =========================================================================
@@ -1231,11 +1282,14 @@ function boot() {
   $('#c-pp-btn').addEventListener('click', e => { e.stopPropagation(); toggleProdPicker(); });
   $('#c-pp-panel').addEventListener('click', e => e.stopPropagation());
   document.addEventListener('click', () => toggleProdPicker(false));   // click outside closes
-  $('#c-rate').value = 60;
+  const prefs = loadPrefs();   // restore tier / rate / prol / round / balance / presets
   ['c-rate', 'c-prol'].forEach(id => $('#' + id).addEventListener('input', calc));
   $('#c-round').addEventListener('change', calc);
   $('#c-balance-off').addEventListener('change', calc);
   $('#c-tier').addEventListener('change', calc);
+  const rp = $('#c-reset-prefs'); if (rp) rp.addEventListener('click', () => {
+    if (confirm('确定清空所有计算器偏好（建筑等级预设、配方选择、目标产物等）？')) resetPrefs();
+  });
   $('#c-search').addEventListener('input', e => filterPicker(e.target.value));
   $('#c-tree').addEventListener('change', e => {
     if (e.target.classList.contains('recipe-pick')) {
@@ -1246,9 +1300,12 @@ function boot() {
       calc();
     }
   });
-  // default target: a meaningful multi-step product if present, else first craftable
-  const defItem = D.items.find(i => i.name.includes('矩阵') && (RECIPES_BY_OUTPUT.get(i.id) || []).length)
-    || D.items.find(i => (RECIPES_BY_OUTPUT.get(i.id) || []).length && i.gridIndex > 0);
+  // restore last target if still valid, else a meaningful multi-step default
+  const savedTarget = (prefs.targetItem && ITEMS.get(prefs.targetItem)) ? prefs.targetItem : null;
+  const defItem = savedTarget
+    ? ITEMS.get(savedTarget)
+    : (D.items.find(i => i.name.includes('矩阵') && (RECIPES_BY_OUTPUT.get(i.id) || []).length)
+       || D.items.find(i => (RECIPES_BY_OUTPUT.get(i.id) || []).length && i.gridIndex > 0));
   if (defItem) selectTarget(defItem.id); else calc();
 
   // guide

@@ -159,7 +159,8 @@ tr.logi td{color:#9fd0b0}
 .pp-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pp-caret{margin-left:auto;color:var(--muted);transition:transform .12s}
 .prod-picker.open .pp-caret{transform:rotate(180deg)}
-.pp-panel{display:none;position:absolute;z-index:60;left:0;top:calc(100% + 6px);width:520px;max-width:92vw;
+.pp-panel{display:none;position:absolute;z-index:60;left:0;top:calc(100% + 6px);
+  width:max-content;min-width:300px;max-width:min(94vw,1060px);
   background:#0c1424;border:1px solid var(--acc);border-radius:10px;padding:9px;
   box-shadow:0 12px 34px rgba(0,0,0,.55)}
 .prod-picker.open .pp-panel{display:block}
@@ -169,8 +170,8 @@ tr.logi td{color:#9fd0b0}
 .pp-tab:hover{border-color:var(--acc);color:#c6d0ee}
 .pp-tab.active{background:var(--acc);color:#06101f;border-color:var(--acc);font-weight:700}
 .pp-n{opacity:.7;font-size:11px}
-.pp-search{width:100%;box-sizing:border-box;margin-bottom:8px}
-.pp-grid{max-height:290px;margin-top:0}
+.pp-search{width:100%;min-width:260px;box-sizing:border-box;margin-bottom:8px}
+.pp-grid{max-height:min(62vh,440px);overflow:auto;margin-top:0}
 .pp-game{display:grid;gap:4px;justify-content:start;align-items:start}
 .pp-cell{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 2px;width:100%;box-sizing:border-box;
   background:#111a2e;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:#a9b6d8}
@@ -240,6 +241,7 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
       <label>增产插件加成 <input id="c-prol" type="number" value="0" min="0" max="1" step="0.05" style="width:75px"></label>
       <label><input id="c-round" type="checkbox"> 机器数向上取整</label>
       <label title="用副产物抵扣其他环节的原料需求，尽量减少过剩副产物"><input id="c-balance-off" type="checkbox"> 关闭副产物自动配平</label>
+      <button id="c-reset-prefs" class="ghost" title="清空已保存的建筑等级/配方预设等偏好">重置偏好</button>
       <label>建筑等级
         <select id="c-tier">
           <option value="basic">基础（最省科技）</option>
@@ -248,7 +250,7 @@ tr.prodrow td{background:#101c30;border-bottom:1px solid var(--acc)}
         </select>
       </label>
     </div>
-    <div class="hint">点击「产物」下拉框，在弹出的<b>分类标签页</b>（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 / 消耗品，★ 为星环新增）中点选图标，或直接搜索。建筑等级选「适配科技等级」时，会按你在<b>通关引导</b>勾选的科技进度，选用当前已解锁的最快建筑。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。</div>
+    <div class="hint">点击「产物」下拉框，在弹出的<b>分类标签页</b>（建筑 / 材料 / 金属矿石 / 化工流体生物 / 军事 / 消耗品，★ 为星环新增）中点选图标，或直接搜索。建筑等级选「适配科技等级」时，会按你在<b>通关引导</b>勾选的科技进度，选用当前已解锁的最快建筑。增产插件填 0.25 表示 +25% 产出；标记「不可增产」的配方会自动忽略该加成。你在展开树里为某个配方选定的<b>建筑等级</b>、为产物选定的<b>配方</b>、以及建筑等级模式/配平开关等<b>偏好会自动保存</b>（localStorage），刷新后保留；点「重置偏好」可清空。</div>
   </div>
 
   <div class="grid g-side">
